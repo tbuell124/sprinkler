@@ -2130,6 +2130,8 @@ def parse_days(day_str: str) -> List[int]:
             v = int(p)
             if 0 <= v <= 6:
                 out.append(v)
+            else:
+                raise ValueError(f"Unknown day token: {p}")
         else:
             try:
                 idx = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"].index(p[:3])
