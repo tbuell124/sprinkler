@@ -927,7 +927,26 @@ input[type="number"]{width:90px}
           <div style="margin-top:8px; display:flex; gap:8px">
             <button id="addScheduleBtn" class="btn primary">Add</button>
             <button id="presetHighfreq" class="btn">High-Freq</button>
-            <button id="presetOffSeason" class="btn">Off Season</button>
+            <button id="disableAllSchedules" class="btn">Disable All</button>
+            <button id="deleteAllSchedules" class="btn">Delete All</button>
+          </div>
+        </div>
+        <div class="add-sched" style="margin-top:24px;">
+          <h3 style="margin:12px 0 8px; font-size:.95rem; color:var(--muted)">Add Multi Schedule</h3>
+          <div id="multiSchedPins" class="row" style="margin-bottom:6px;"></div>
+          <label>On <input id="multiSchedOn" type="text" placeholder="HH:MM" size="5"></label>
+          <label>Off <input id="multiSchedOff" type="text" placeholder="HH:MM" size="5"></label>
+          <div id="multiSchedDays" class="row" style="margin-top:6px;">
+            <label><input type="checkbox" value="0">Mon</label>
+            <label><input type="checkbox" value="1">Tue</label>
+            <label><input type="checkbox" value="2">Wed</label>
+            <label><input type="checkbox" value="3">Thu</label>
+            <label><input type="checkbox" value="4">Fri</label>
+            <label><input type="checkbox" value="5">Sat</label>
+            <label><input type="checkbox" value="6">Sun</label>
+          </div>
+          <div style="margin-top:8px; display:flex; gap:8px">
+            <button id="addMultiScheduleBtn" class="btn">Add</button>
           </div>
         </div>
       </div>
@@ -977,6 +996,7 @@ function bySlotThenGpio(pins){
   spares.sort((a,b)=>a.pin - b.pin);
   return {slots, spares};
 }
+var countdownTimers = {};
 function fmtTime(s){
   var m = Math.floor(s/60), r = s % 60;
   return String(m) + ":" + String(r).padStart(2,'0');
@@ -1002,6 +1022,7 @@ function fetchStatus(){
     renderPinsGrouped(data.pins_slots, data.pins_spares, data.automation_enabled);
     updateSchedules(data.schedules);
     hydratePinSelect(data.pins);
+    hydrateMultiPinSelect(data.pins);
   });
   fetch('/api/rain').then(r=>r.json()).then(updateRain).catch(()=>{});
 }
@@ -1024,6 +1045,9 @@ function renderPinsGrouped(slots, spares, automationEnabled){
   slots.forEach(p => activeList.appendChild(makePinRow(p, automationEnabled)));
   spares.forEach(p => spareList.appendChild(makePinRow(p, automationEnabled)));
 
+  enablePinDrag('activeList');
+  enablePinDrag('spareList');
+
   document.getElementById('activeSummary').textContent =
   slots.length + ' slot' + (slots.length!==1 ? 's' : '');
 document.getElementById('spareSummary').textContent  =
@@ -1039,6 +1063,8 @@ if(running>1){
 }
 function makePinRow(p, automationEnabled){
   const row = document.createElement('div'); row.className='pin-row';
+  row.draggable = true;
+  row.dataset.pin = p.pin;
 
   const dot = document.createElement('span'); dot.className='dot'+(p.is_active?' on':''); row.appendChild(dot);
   var gpio = document.createElement('span'); gpio.className='gpio'; gpio.textContent='GPIO ' + p.pin; row.appendChild(gpio);
@@ -1078,20 +1104,45 @@ fetch('/api/pin/' + p.pin + '/on?seconds=' + secs, {method:'POST'}).then(functio
   return row;
 }
 function startCountdown(pin, seconds){
+  if(countdownTimers[pin]){ clearInterval(countdownTimers[pin]); }
   var remaining = seconds;
   var el = document.getElementById('countdown-' + pin);
   if(!el) return;
   el.textContent = fmtTime(remaining);
-  var id = setInterval(function(){
+  countdownTimers[pin] = setInterval(function(){
     remaining--;
     if(remaining<=0){
-      clearInterval(id);
+      clearInterval(countdownTimers[pin]);
+      delete countdownTimers[pin];
       el.textContent = '';
     }else{
       el.textContent = fmtTime(remaining);
     }
   }, 1000);
 }
+
+}
+
+function enablePinDrag(listId){
+  var list = document.getElementById(listId);
+  if(!list) return;
+  var dragged = null;
+  list.querySelectorAll('.pin-row').forEach(r=> r.draggable = true);
+  list.ondragstart = function(e){ dragged = e.target.closest('.pin-row'); };
+  list.ondragover = function(e){ e.preventDefault(); };
+  list.ondrop = function(e){
+    e.preventDefault();
+    var target = e.target.closest('.pin-row');
+    if(dragged && target && dragged !== target){
+      list.insertBefore(dragged, (target.compareDocumentPosition(dragged) & Node.DOCUMENT_POSITION_FOLLOWING) ? target.nextSibling : target);
+      updatePinOrder();
+    }
+    dragged = null;
+  };
+}
+function updatePinOrder(){
+  var pins = [...document.querySelectorAll('#activeList .pin-row, #spareList .pin-row')].map(r=> parseInt(r.dataset.pin,10));
+  fetch('/api/pin/order',{method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({pins:pins})});
 }
 /* ========= Schedules ========= */
 function updateSchedules(schedules){
@@ -1102,6 +1153,7 @@ function updateSchedules(schedules){
     var s = schedules[i];
 
     var tr = document.createElement('tr');
+    tr.dataset.id = s.id;
     if(!s.enabled){ tr.classList.add('disabled'); }
 
     // Zone
@@ -1241,6 +1293,7 @@ function updateSchedules(schedules){
   var summary = schedules.length + ' schedule' + (schedules.length !== 1 ? 's' : '');
   document.getElementById('schedSummary').textContent =
   schedules.length + ' schedule' + (schedules.length!==1 ? 's' : '');
+  enableScheduleDrag();
 }
 function hydratePinSelect(_){
   fetch('/api/status').then(r=>r.json()).then(data=>{
@@ -1253,8 +1306,41 @@ sel.appendChild(o);
     });
   });
 }
+function hydrateMultiPinSelect(pins){
+  const box = document.getElementById('multiSchedPins');
+  if(!box) return;
+  box.innerHTML = '';
+  pins.forEach(p=>{
+    var lb=document.createElement('label');
+    lb.style.marginRight='8px';
+    var cb=document.createElement('input'); cb.type='checkbox'; cb.value=p.pin;
+    lb.appendChild(cb); lb.append('GPIO ' + p.pin);
+    box.appendChild(lb);
+  });
+}
 function updateSchedule(id, obj){
   fetch(`/api/schedule/${id}`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(obj)}).then(fetchStatus);
+}
+
+function enableScheduleDrag(){
+  var tbody = document.getElementById('schedBody');
+  var dragged = null;
+  tbody.querySelectorAll('tr').forEach(tr=> tr.draggable = true);
+  tbody.ondragstart = function(e){ dragged = e.target.closest('tr'); };
+  tbody.ondragover = function(e){ e.preventDefault(); };
+  tbody.ondrop = function(e){
+    e.preventDefault();
+    var target = e.target.closest('tr');
+    if(dragged && target && dragged!==target){
+      tbody.insertBefore(dragged, (target.compareDocumentPosition(dragged) & Node.DOCUMENT_POSITION_FOLLOWING) ? target.nextSibling : target);
+      updateScheduleOrder();
+    }
+    dragged = null;
+  };
+}
+function updateScheduleOrder(){
+  var ids = [...document.querySelectorAll('#schedBody tr')].map(tr=> tr.dataset.id);
+  fetch('/api/schedule/order',{method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ids:ids})});
 }
 
 /* ========= Rain ========= */
@@ -1309,6 +1395,18 @@ document.addEventListener('DOMContentLoaded', ()=>{
       .then(r=>r.ok?fetchStatus():r.text().then(t=>alert(t)));
   });
 
+  document.getElementById('addMultiScheduleBtn').addEventListener('click', ()=>{
+    const pins = [...document.querySelectorAll('#multiSchedPins input[type=checkbox]:checked')].map(cb=>parseInt(cb.value,10));
+    const onVal = document.getElementById('multiSchedOn').value.trim();
+    const offVal= document.getElementById('multiSchedOff').value.trim();
+    const days = [...document.querySelectorAll('#multiSchedDays input[type=checkbox]:checked')].map(cb=>parseInt(cb.value,10));
+    if(pins.length===0) return alert('Select at least one pin');
+    if(!/^\d{1,2}:\d{2}$/.test(onVal) || !/^\d{1,2}:\d{2}$/.test(offVal)) return alert('Times must be HH:MM');
+    if(days.length===0) return alert('Select at least one day');
+    Promise.all(pins.map(p=> fetch('/api/schedule',{method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({pin:p,on:onVal,off:offVal,days:days})}) ))
+      .then(fetchStatus);
+  });
+
   // Presets (keep your existing behavior here if you like)
   var hfBtn = document.getElementById('presetHighfreq');
 if (hfBtn){
@@ -1316,9 +1414,15 @@ if (hfBtn){
     alert('High-Freq preset stub — implement to your preference.');
   });
 }
-  document.getElementById('presetOffSeason')?.addEventListener('click', ()=>{
+  document.getElementById('disableAllSchedules')?.addEventListener('click', ()=>{
     fetch('/api/status').then(r=>r.json()).then(data=>{
       Promise.all(data.schedules.map(s=> fetch(`/api/schedule/${s.id}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:false})}) )).then(fetchStatus);
+    });
+  });
+document.getElementById('deleteAllSchedules')?.addEventListener('click', ()=>{
+    if(!confirm('Delete all schedules?')) return;
+    fetch('/api/status').then(r=>r.json()).then(data=>{
+      Promise.all(data.schedules.map(s=> fetch(`/api/schedule/${s.id}`,{method:'DELETE'}) )).then(fetchStatus);
     });
   });
 
@@ -1349,25 +1453,31 @@ if (hfBtn){
 
     def _split_and_sort_pins_for_view(cfg, pinman):
         """Return (slots_sorted, spares_sorted, combined_sorted) for UI."""
-        slots, spares = [], []
+        order = cfg.get("pin_order")
+        items = []
+        if isinstance(order, list):
+            for p in order:
+                meta = cfg["pins"].get(str(p))
+                if not meta:
+                    continue
+                name = meta.get("name", f"Pin {p}")
+                is_active = pinman.get_state(p)
+                items.append({"pin": p, "name": name, "is_active": is_active})
         for pin_str, meta in cfg["pins"].items():
-            pin = int(pin_str)
-            name = meta.get("name", f"Pin {pin}")
-            is_active = pinman.get_state(pin)
-            item = {"pin": pin, "name": name, "is_active": is_active}
-
-            m_slot = re.match(r"\s*Slot\s+(\d+)\b", name, re.IGNORECASE)
+            p = int(pin_str)
+            if order and p in order:
+                continue
+            name = meta.get("name", f"Pin {p}")
+            is_active = pinman.get_state(p)
+            items.append({"pin": p, "name": name, "is_active": is_active})
+        slots, spares = [], []
+        for item in items:
+            m_slot = re.match(r"\s*Slot\s+(\d+)\b", item["name"], re.IGNORECASE)
             if m_slot:
-                item["_slot_num"] = int(m_slot.group(1))
                 slots.append(item)
             else:
-                m_spare = re.search(r"\bSpare\s+(\d+)\b", name, re.IGNORECASE)
-                item["_spare_num"] = int(m_spare.group(1)) if m_spare else 10_000
                 spares.append(item)
-
-        slots.sort(key=lambda x: x.get("_slot_num", 10_000))
-        spares.sort(key=lambda x: (x.get("_spare_num", 10_000), x["pin"]))
-        return slots, spares, (slots + spares)
+        return slots, spares, items
 
 
     @app.get("/api/status")
@@ -1474,6 +1584,25 @@ if (hfBtn){
             pmeta["name"] = new_name
             save_config(cfg)
         return jsonify({"pin": pin, "name": new_name})
+
+    @app.post("/api/pin/order")
+    def api_pin_order():
+        data = request.get_json(force=True) or {}
+        pins = data.get("pins")
+        if not isinstance(pins, list):
+            return ("Invalid pins", 400)
+        pins_int = []
+        for p in pins:
+            try:
+                pi = int(p)
+            except Exception:
+                continue
+            if str(pi) in cfg.get("pins", {}):
+                pins_int.append(pi)
+        with LOCK:
+            cfg["pin_order"] = pins_int
+            save_config(cfg)
+        return "OK"
 
     @app.post("/api/schedule")
     def api_schedule_add():
@@ -1647,6 +1776,22 @@ if (hfBtn){
             save_config(cfg)
         sched.reload_jobs()
         return jsonify({"deleted": before - len(cfg.get("schedules", []))})
+
+    @app.post("/api/schedule/order")
+    def api_schedule_order():
+        data = request.get_json(force=True) or {}
+        ids = data.get("ids")
+        if not isinstance(ids, list):
+            return ("Invalid ids", 400)
+        with LOCK:
+            existing = {s["id"]: s for s in cfg.get("schedules", [])}
+            new_list = [existing[i] for i in ids if i in existing]
+            for i in list(existing.keys()):
+                if i not in ids:
+                    new_list.append(existing[i])
+            cfg["schedules"] = new_list
+            save_config(cfg)
+        return "OK"
 
     @app.get("/api/rain")
     def api_rain_status():
