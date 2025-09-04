@@ -937,6 +937,12 @@ input[type="number"]{width:90px}
             <button id="deleteAllSchedules" class="btn">Delete All</button>
           </div>
         </div>
+        <div class="seq-sched" style="margin-top:20px;">
+          <h3 style="margin:12px 0 8px; font-size:.95rem; color:var(--muted)">Sequence Schedules</h3>
+          <label>Start <input id="seqStart" type="text" placeholder="HH:MM" size="5"></label>
+          <label>Duration <input id="seqDur" type="text" placeholder="HH:MM" size="5"></label>
+          <button id="runSeqBtn" class="btn">Run Sequence</button>
+        </div>
       </div>
     </div>
   </section>
@@ -985,6 +991,7 @@ function bySlotThenGpio(pins){
   return {slots, spares};
 }
 var countdownTimers = {};
+var currentSchedules = [];
 function fmtTime(s){
   var m = Math.floor(s/60), r = s % 60;
   return String(m) + ":" + String(r).padStart(2,'0');
@@ -1142,6 +1149,7 @@ function setupPinDrag(list){
 
   /* ========= Schedules ========= */
   function updateSchedules(schedules){
+  currentSchedules = schedules.slice();
   var tbody = document.getElementById('schedBody');
   tbody.innerHTML = '';
 
@@ -1328,6 +1336,30 @@ function setupScheduleDrag(){
   tbody.addEventListener('drop', e=>{ e.preventDefault(); sendScheduleOrder(); });
 }
 
+function sequenceSchedules(){
+  const startVal = document.getElementById('seqStart').value.trim();
+  const durVal = document.getElementById('seqDur').value.trim();
+  const start = parseHHMM(startVal);
+  const dur = parseHHMM(durVal);
+  if(start == null || dur == null){
+    alert('Times must be HH:MM');
+    return;
+  }
+  let cur = start;
+  const promises = [];
+  for(const s of currentSchedules){
+    const on = cur;
+    const off = cur + dur;
+    if(off >= 24*60){
+      alert('Sequence would cross midnight.');
+      return;
+    }
+    promises.push(fetch(`/api/schedule/${s.id}`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({on:toHHMM(on), off:toHHMM(off)})}));
+    cur = off;
+  }
+  Promise.all(promises).then(fetchStatus);
+}
+
   /* ========= Rain ========= */
   function updateRain(rd){
   var badge = document.getElementById('rainBadge');
@@ -1383,6 +1415,9 @@ document.addEventListener('DOMContentLoaded', ()=>{
     fetch('/api/schedule', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({pin:pin,on:onVal,off:offVal,days:days})})
       .then(r=>r.ok?fetchStatus():r.text().then(t=>alert(t)));
   });
+
+  // Sequence schedules
+  document.getElementById('runSeqBtn').addEventListener('click', sequenceSchedules);
 
   // Presets (keep your existing behavior here if you like)
   var hfBtn = document.getElementById('presetHighfreq');
