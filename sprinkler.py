@@ -1107,13 +1107,36 @@ function stopCountdown(pin){
 }
 
   }
+let dragEl;
 function sendPinOrder(){
-  const order = [...document.querySelectorAll('#activeList .pin-row, #spareList .pin-row')].map(r=>parseInt(r.dataset.pin,10));
-  fetch('/api/pins/reorder', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({order})}).then(fetchStatus);
+  const active = [...document.querySelectorAll('#activeList .pin-row')];
+  const spare  = [...document.querySelectorAll('#spareList .pin-row')];
+  const order = active.concat(spare).map(r=>parseInt(r.dataset.pin,10));
+  const reqs = [fetch('/api/pins/reorder', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({order})})];
+  active.forEach((r, i)=>{
+    const inp = r.querySelector('.pin-name');
+    const original = inp.value || '';
+    const base = original.replace(/^\s*(Slot|Spare)\s*\d+\s*-?\s*/i, '').trim();
+    const name = base ? `Slot ${i+1} - ${base}` : `Slot ${i+1}`;
+    inp.value = name;
+    if(name !== original){
+      reqs.push(fetch(`/api/pin/${r.dataset.pin}/name`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name})}));
+    }
+  });
+  spare.forEach(r=>{
+    const inp = r.querySelector('.pin-name');
+    const original = inp.value || '';
+    const base = original.replace(/^\s*(Slot|Spare)\s*\d+\s*-?\s*/i, '').trim();
+    const name = base || `GPIO ${r.dataset.pin}`;
+    inp.value = name;
+    if(name !== original){
+      reqs.push(fetch(`/api/pin/${r.dataset.pin}/name`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name})}));
+    }
+  });
+  Promise.all(reqs).then(fetchStatus);
 }
 
 function setupPinDrag(list){
-  let dragEl;
   list.addEventListener('dragstart', e=>{
     dragEl = e.target.closest('.pin-row');
     e.dataTransfer.effectAllowed='move';
@@ -1121,10 +1144,14 @@ function setupPinDrag(list){
   list.addEventListener('dragover', e=>{
     e.preventDefault();
     const target = e.target.closest('.pin-row');
-    if(!target || target===dragEl) return;
+    if(!target){
+      list.appendChild(dragEl);
+      return;
+    }
+    if(target===dragEl) return;
     const rect = target.getBoundingClientRect();
     const next = (e.clientY - rect.top)/(rect.bottom-rect.top) > 0.5;
-    list.insertBefore(dragEl, next ? target.nextSibling : target);
+    target.parentElement.insertBefore(dragEl, next ? target.nextSibling : target);
   });
   list.addEventListener('drop', e=>{ e.preventDefault(); sendPinOrder(); });
 }
