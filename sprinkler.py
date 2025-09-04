@@ -774,7 +774,7 @@ def build_app(cfg: dict, pinman: PinManager, sched: SprinklerScheduler, rain: Ra
     # API endpoints are reused: pin control, renaming, schedule
     # management and rain delay queries.
     
-    HTML = """<!doctype html>
+    HTML = r"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
