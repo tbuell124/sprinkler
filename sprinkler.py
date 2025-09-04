@@ -1092,6 +1092,7 @@ function startCountdown(pin, seconds){
     }
   }, 1000);
 }
+}
 /* ========= Schedules ========= */
 function updateSchedules(schedules){
   var tbody = document.getElementById('schedBody');
