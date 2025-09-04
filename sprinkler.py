@@ -1078,7 +1078,10 @@ fetch('/api/pin/' + p.pin + '/on?seconds=' + secs, {method:'POST'}).then(functio
   row.appendChild(run);
 
   const stop = document.createElement('button'); stop.className='btn'; stop.textContent='STOP';
-  stop.addEventListener('click', ()=> fetch(`/api/pin/${p.pin}/off`, {method:'POST'}));
+  stop.addEventListener('click', ()=>{
+    fetch(`/api/pin/${p.pin}/off`, {method:'POST'}).then(()=> stopCountdown(p.pin));
+    stopCountdown(p.pin);
+  });
   row.appendChild(stop);
 
   var cd = document.createElement('span'); cd.id='countdown-' + p.pin; cd.className='countdown'; row.appendChild(cd);
@@ -1101,6 +1104,17 @@ function startCountdown(pin, seconds){
       el.textContent = fmtTime(remaining);
     }
   }, 1000);
+}
+
+function stopCountdown(pin){
+  if(countdownTimers[pin]){
+    clearInterval(countdownTimers[pin]);
+    delete countdownTimers[pin];
+  }
+  var el = document.getElementById('countdown-' + pin);
+  if(el){
+    el.textContent = '';
+  }
 }
 
   }
