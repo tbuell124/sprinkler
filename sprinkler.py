@@ -1860,8 +1860,7 @@ Launch the web interface and background scheduler with:
 
 Navigate to http://<pi‑ip>:8000 to view current pin states, existing
 schedules, and to apply presets.  Use the “Season” button to apply
-your regular 30‑minute sequential schedule, or “High‑frequency” to
-apply the 20‑minute repeated schedule.
+your regular 30‑minute sequential schedule.
 
 Pin control from the command line
 ---------------------------------
