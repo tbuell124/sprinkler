@@ -421,6 +421,17 @@ class SprinklerScheduler:
         self._poll_thread = threading.Thread(target=self._poll_loop, daemon=True)
         self._poll_thread.start()
 
+    @staticmethod
+    def _minutes_since_midnight(t: str) -> int:
+        """Return minutes since midnight for HH:MM strings."""
+        parts = t.split(":")
+        if len(parts) != 2:
+            raise ValueError("Bad time format")
+        h, m = map(int, parts)
+        if not (0 <= h < 24 and 0 <= m < 60):
+            raise ValueError("Bad time value")
+        return h * 60 + m
+
     def _poll_loop(self) -> None:
         """Fallback scheduling loop.
 
@@ -461,23 +472,27 @@ class SprinklerScheduler:
                                 day_list = [int(d) for d in days]
                             except Exception:
                                 day_list = []
-                            if day_idx not in day_list:
-                                continue
                             on_time = str(entry.get("on", "")).strip()
                             off_time = str(entry.get("off", "")).strip()
-                            # Compare times at minute resolution
-                            if on_time == current_time:
-                                # Attempt to turn on the pin; handle rain delay
-                                try:
-                                    self._maybe_on(pin)
-                                except Exception:
-                                    pass
-                            if off_time == current_time:
-                                # Turn off without rain delay
-                                try:
-                                    self.pinman.off(pin)
-                                except Exception:
-                                    pass
+                            try:
+                                on_min = self._minutes_since_midnight(on_time)
+                                off_min = self._minutes_since_midnight(off_time)
+                            except Exception:
+                                continue
+                            for di in day_list:
+                                off_day = di if off_min > on_min else (di + 1) % 7
+                                if day_idx == di and on_time == current_time:
+                                    # Attempt to turn on the pin; handle rain delay
+                                    try:
+                                        self._maybe_on(pin)
+                                    except Exception:
+                                        pass
+                                if day_idx == off_day and off_time == current_time:
+                                    # Turn off without rain delay
+                                    try:
+                                        self.pinman.off(pin)
+                                    except Exception:
+                                        pass
             except Exception:
                 # Log any unexpected error but continue looping
                 try:
@@ -546,6 +561,8 @@ class SprinklerScheduler:
                     raise ValueError("Bad time format")
                 on_hour, on_minute = map(int, on_parts)
                 off_hour, off_minute = map(int, off_parts)
+                on_min_total = on_hour * 60 + on_minute
+                off_min_total = off_hour * 60 + off_minute
                 days = entry.get("days", list(range(7)))
                 if days is None:
                     days = list(range(7))
@@ -561,13 +578,15 @@ class SprinklerScheduler:
                         replace_existing=True,
                         misfire_grace_time=300,
                     )
-                    # OFF job
-                    trig_off = CronTrigger(day_of_week=di, hour=off_hour, minute=off_minute)
+                    # OFF job; if off time precedes or equals on time,
+                    # schedule for the following day.
+                    off_day = di if off_min_total > on_min_total else (di + 1) % 7
+                    trig_off = CronTrigger(day_of_week=off_day, hour=off_hour, minute=off_minute)
                     self.sched.add_job(
                         self.pinman.off,
                         args=[pin],
                         trigger=trig_off,
-                        id=f"{entry['id']}-off-{di}",
+                        id=f"{entry['id']}-off-{off_day}",
                         replace_existing=True,
                         misfire_grace_time=300,
                     )
