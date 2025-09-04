@@ -1046,7 +1046,7 @@ if(running>1){
   warn.style.display='none';
 }
 function makePinRow(p, automationEnabled){
-  const row = document.createElement('div'); row.className='pin-row';
+  const row = document.createElement('div'); row.className='pin-row'; row.draggable=true; row.dataset.pin = p.pin;
 
   const dot = document.createElement('span'); dot.className='dot'+(p.is_active?' on':''); row.appendChild(dot);
   var gpio = document.createElement('span'); gpio.className='gpio'; gpio.textContent='GPIO ' + p.pin; row.appendChild(gpio);
@@ -1103,9 +1103,31 @@ function startCountdown(pin, seconds){
   }, 1000);
 }
 
+  }
+function sendPinOrder(){
+  const order = [...document.querySelectorAll('#activeList .pin-row, #spareList .pin-row')].map(r=>parseInt(r.dataset.pin,10));
+  fetch('/api/pins/reorder', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({order})}).then(fetchStatus);
 }
-/* ========= Schedules ========= */
-function updateSchedules(schedules){
+
+function setupPinDrag(list){
+  let dragEl;
+  list.addEventListener('dragstart', e=>{
+    dragEl = e.target.closest('.pin-row');
+    e.dataTransfer.effectAllowed='move';
+  });
+  list.addEventListener('dragover', e=>{
+    e.preventDefault();
+    const target = e.target.closest('.pin-row');
+    if(!target || target===dragEl) return;
+    const rect = target.getBoundingClientRect();
+    const next = (e.clientY - rect.top)/(rect.bottom-rect.top) > 0.5;
+    list.insertBefore(dragEl, next ? target.nextSibling : target);
+  });
+  list.addEventListener('drop', e=>{ e.preventDefault(); sendPinOrder(); });
+}
+
+  /* ========= Schedules ========= */
+  function updateSchedules(schedules){
   var tbody = document.getElementById('schedBody');
   tbody.innerHTML = '';
 
@@ -1113,6 +1135,7 @@ function updateSchedules(schedules){
     var s = schedules[i];
 
     var tr = document.createElement('tr');
+    tr.draggable = true; tr.dataset.id = s.id;
     if(!s.enabled){ tr.classList.add('disabled'); }
 
     // Zone
@@ -1264,12 +1287,35 @@ sel.appendChild(o);
     });
   });
 }
-function updateSchedule(id, obj){
-  fetch(`/api/schedule/${id}`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(obj)}).then(fetchStatus);
+  function updateSchedule(id, obj){
+    fetch(`/api/schedule/${id}`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(obj)}).then(fetchStatus);
+  }
+
+function sendScheduleOrder(){
+  const order = [...document.querySelectorAll('#schedBody tr')].map(r=>r.dataset.id);
+  fetch('/api/schedules/reorder', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({order})}).then(fetchStatus);
 }
 
-/* ========= Rain ========= */
-function updateRain(rd){
+function setupScheduleDrag(){
+  const tbody = document.getElementById('schedBody');
+  let dragEl;
+  tbody.addEventListener('dragstart', e=>{
+    dragEl = e.target.closest('tr');
+    e.dataTransfer.effectAllowed='move';
+  });
+  tbody.addEventListener('dragover', e=>{
+    e.preventDefault();
+    const target = e.target.closest('tr');
+    if(!target || target===dragEl) return;
+    const rect = target.getBoundingClientRect();
+    const next = (e.clientY - rect.top)/(rect.bottom-rect.top) > 0.5;
+    tbody.insertBefore(dragEl, next ? target.nextSibling : target);
+  });
+  tbody.addEventListener('drop', e=>{ e.preventDefault(); sendScheduleOrder(); });
+}
+
+  /* ========= Rain ========= */
+  function updateRain(rd){
   var badge = document.getElementById('rainBadge');
   if(!rd || !('enabled' in rd)){ badge.style.display='none'; return; }
   badge.style.display='inline-block';
@@ -1307,6 +1353,10 @@ document.addEventListener('DOMContentLoaded', ()=>{
       applyTheme(next);
     });
   }
+
+  setupPinDrag(document.getElementById('activeList'));
+  setupPinDrag(document.getElementById('spareList'));
+  setupScheduleDrag();
 
   // Add Schedule
   document.getElementById('addScheduleBtn').addEventListener('click', ()=>{
@@ -1371,7 +1421,12 @@ document.getElementById('deleteAllSchedules')?.addEventListener('click', ()=>{
             pin = int(pin_str)
             name = meta.get("name", f"Pin {pin}")
             is_active = pinman.get_state(pin)
-            item = {"pin": pin, "name": name, "is_active": is_active}
+            item = {
+                "pin": pin,
+                "name": name,
+                "is_active": is_active,
+                "_order": meta.get("order"),
+            }
 
             m_slot = re.match(r"\s*Slot\s+(\d+)\b", name, re.IGNORECASE)
             if m_slot:
@@ -1382,8 +1437,14 @@ document.getElementById('deleteAllSchedules')?.addEventListener('click', ()=>{
                 item["_spare_num"] = int(m_spare.group(1)) if m_spare else 10_000
                 spares.append(item)
 
-        slots.sort(key=lambda x: x.get("_slot_num", 10_000))
-        spares.sort(key=lambda x: (x.get("_spare_num", 10_000), x["pin"]))
+        if any(p.get("_order") is not None for p in slots):
+            slots.sort(key=lambda x: x.get("_order", 0))
+        else:
+            slots.sort(key=lambda x: x.get("_slot_num", 10_000))
+        if any(p.get("_order") is not None for p in spares):
+            spares.sort(key=lambda x: x.get("_order", 0))
+        else:
+            spares.sort(key=lambda x: (x.get("_spare_num", 10_000), x["pin"]))
         return slots, spares, (slots + spares)
 
 
@@ -1491,6 +1552,27 @@ document.getElementById('deleteAllSchedules')?.addEventListener('click', ()=>{
             pmeta["name"] = new_name
             save_config(cfg)
         return jsonify({"pin": pin, "name": new_name})
+
+    @app.post("/api/pins/reorder")
+    def api_pins_reorder():
+        """Update order of pins based on a list of pin numbers."""
+        data = request.get_json(force=True) or {}
+        order = data.get("order")
+        if not isinstance(order, list):
+            return ("Invalid order", 400)
+        try:
+            order_int = [int(p) for p in order]
+        except Exception:
+            return ("Invalid order", 400)
+        with LOCK:
+            pins_cfg = cfg.setdefault("pins", {})
+            if set(map(str, order_int)) != set(pins_cfg.keys()):
+                return ("Order must contain all pins", 400)
+            for idx, pin in enumerate(order_int):
+                pins_cfg[str(pin)]["order"] = idx
+            cfg["pins"] = {str(pin): pins_cfg[str(pin)] for pin in order_int}
+            save_config(cfg)
+        return "OK"
 
     @app.post("/api/schedule")
     def api_schedule_add():
@@ -1664,6 +1746,22 @@ document.getElementById('deleteAllSchedules')?.addEventListener('click', ()=>{
             save_config(cfg)
         sched.reload_jobs()
         return jsonify({"deleted": before - len(cfg.get("schedules", []))})
+
+    @app.post("/api/schedules/reorder")
+    def api_schedules_reorder():
+        """Update the order of schedules based on a list of IDs."""
+        data = request.get_json(force=True) or {}
+        order = data.get("order")
+        if not isinstance(order, list):
+            return ("Invalid order", 400)
+        with LOCK:
+            sched_map = {s["id"]: s for s in cfg.get("schedules", [])}
+            if set(order) != set(sched_map.keys()):
+                return ("Order must contain all schedules", 400)
+            cfg["schedules"] = [sched_map[i] for i in order]
+            save_config(cfg)
+        sched.reload_jobs()
+        return "OK"
 
     @app.get("/api/rain")
     def api_rain_status():
