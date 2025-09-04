@@ -1368,13 +1368,8 @@ function sequenceSchedules(){
   const promises = [];
   for (const s of currentSchedules) {
     const on = cur % (24 * 60);
-    let off = on + dur;
-    if (off > 24 * 60) {
-      off = 24 * 60;
-      cur += 24 * 60 - on;
-    } else {
-      cur += dur;
-    }
+    const off = on + dur;
+    cur += dur;
     promises.push(
       fetch(`/api/schedule/${s.id}`, {
         method: 'POST',
