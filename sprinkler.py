@@ -901,7 +901,6 @@ input[type="number"]{width:90px}
           <h3 style="margin:12px 0 8px; font-size:.95rem; color:var(--muted)">Add Schedule</h3>
           <label>Pin <select id="newSchedPin"></select></label>
           <label>On <input id="newSchedOn" type="text" placeholder="HH:MM" size="5"></label>
-          <label>Off <input id="newSchedOff" type="text" placeholder="HH:MM" size="5"></label>
           <label>Duration <input id="newSchedDur" type="text" placeholder="HH:MM" size="5"></label>
           <div id="newSchedDays" class="row" style="margin-top:6px;">
             <label><input type="checkbox" value="0">Mon</label>
@@ -1392,11 +1391,15 @@ document.addEventListener('DOMContentLoaded', ()=>{
   document.getElementById('addScheduleBtn').addEventListener('click', ()=>{
     const pin = parseInt(document.getElementById('newSchedPin').value,10);
     const onVal = document.getElementById('newSchedOn').value.trim();
-    const offVal= document.getElementById('newSchedOff').value.trim();
+    const durVal = document.getElementById('newSchedDur').value.trim();
     const days = [...document.querySelectorAll('#newSchedDays input[type=checkbox]')].filter(cb=>cb.checked).map(cb=>parseInt(cb.value,10));
-    if(!/^\d{1,2}:\d{2}$/.test(onVal) || !/^\d{1,2}:\d{2}$/.test(offVal)) return alert('Times must be HH:MM');
+    const onM = parseHHMM(onVal);
+    const durM = parseHHMM(durVal);
+    if(onM==null || durM==null) return alert('Times must be HH:MM');
     if(days.length===0) return alert('Select at least one day');
-    fetch('/api/schedule', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({pin:pin,on:onVal,off:offVal,days:days})})
+    const on = toHHMM(onM);
+    const off = toHHMM((onM + durM) % (24*60));
+    fetch('/api/schedule', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({pin,on,off,days})})
       .then(r=>r.ok?fetchStatus():r.text().then(t=>alert(t)));
   });
 
