@@ -3,12 +3,10 @@
 sprinkler.py
 
 This script provides a fully‑automated GPIO sprinkler controller designed for
-Raspberry Pi.  It builds upon the earlier example by adding two preset
-schedules and accommodating the specific set of pins used by the
-requester.  The presets allow you to switch between a “regular season”
-schedule and a “high‑frequency” schedule with a single command.  It also
-exposes a simple CLI and optional web UI for monitoring and adjusting
-state at runtime.
+Raspberry Pi.  It builds upon the earlier example by adding a preset
+schedule and accommodating the specific set of pins used by the
+requester. It also exposes a simple CLI and optional web UI for monitoring
+and adjusting state at runtime.
 
 Key features:
 
@@ -17,10 +15,6 @@ Key features:
   • A `preset season` command builds a schedule where each active zone
     runs sequentially for 30 minutes every day, except the garden zone
     (19) which only runs on Tuesday, Thursday and Saturday.
-  • A `preset highfreq` command creates a high‑frequency schedule where
-    each non‑garden zone runs for 20 minutes at four evenly spaced
-    intervals (midnight, 6 am, noon and 6 pm).  The garden zone is
-    excluded from this preset.
   • Existing CLI commands remain available for manual schedule
     management, on/off control, automation toggling and time/NTP
     configuration.
@@ -638,38 +632,6 @@ def build_season_schedules() -> List[dict]:
             "enabled": True,
         }
     )
-    return schedules
-
-
-def build_highfreq_schedules() -> List[dict]:
-    """Construct the high‑frequency schedule.
-
-    Pins 5,6,11,12,16,20,21 and 26 run for 20 minutes each,
-    sequentially at four times per day: 00:00, 06:00, 12:00 and 18:00.
-    The garden zone (19) is excluded from this preset.
-    """
-    order = [5, 6, 11, 12, 16, 20, 21, 26]
-    cycle_starts = ["00:00", "06:00", "12:00", "18:00"]
-    dur = timedelta(minutes=20)
-    schedules = []
-    for start_str in cycle_starts:
-        base_start = datetime.strptime(start_str, "%H:%M")
-        for i, p in enumerate(order):
-            on_time = (base_start + i * dur).strftime("%H:%M")
-            off_time = (base_start + (i + 1) * dur).strftime("%H:%M")
-            schedules.append(
-                {
-                    "id": str(uuid.uuid4()),
-                    "pin": p,
-                    "on": on_time,
-                    "off": off_time,
-                    "days": list(range(7)),
-                    "enabled": True,
-                }
-            )
-    return schedules
-
-
 # Helpers to run system commands (timedatectl, etc.)
 def run_cmd(cmd: List[str]) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -940,6 +902,7 @@ input[type="number"]{width:90px}
           <label>Pin <select id="newSchedPin"></select></label>
           <label>On <input id="newSchedOn" type="text" placeholder="HH:MM" size="5"></label>
           <label>Off <input id="newSchedOff" type="text" placeholder="HH:MM" size="5"></label>
+          <label>Duration <input id="newSchedDur" type="text" placeholder="HH:MM" size="5"></label>
           <div id="newSchedDays" class="row" style="margin-top:6px;">
             <label><input type="checkbox" value="0">Mon</label>
             <label><input type="checkbox" value="1">Tue</label>
@@ -951,7 +914,7 @@ input[type="number"]{width:90px}
           </div>
           <div style="margin-top:8px; display:flex; gap:8px">
             <button id="addScheduleBtn" class="btn primary">Add</button>
-            <button id="presetHighfreq" class="btn">High-Freq</button>
+            <button id="addActiveBtn" class="btn">Add Active Pins</button>
             <button id="disableAllSchedules" class="btn">Disable All</button>
             <button id="deleteAllSchedules" class="btn">Delete All</button>
           </div>
@@ -1437,16 +1400,23 @@ document.addEventListener('DOMContentLoaded', ()=>{
       .then(r=>r.ok?fetchStatus():r.text().then(t=>alert(t)));
   });
 
+  document.getElementById('addActiveBtn').addEventListener('click', ()=>{
+    const onVal = document.getElementById('newSchedOn').value.trim();
+    const durVal = document.getElementById('newSchedDur').value.trim();
+    const days = [...document.querySelectorAll('#newSchedDays input[type=checkbox]')].filter(cb=>cb.checked).map(cb=>parseInt(cb.value,10));
+    const onM = parseHHMM(onVal);
+    const durM = parseHHMM(durVal);
+    if(onM==null || durM==null) return alert('Times must be HH:MM');
+    if(days.length===0) return alert('Select at least one day');
+    const off = toHHMM((onM + durM) % (24 * 60));
+    const on = toHHMM(onM);
+    const pins = [...document.querySelectorAll('#activeList .pin-row')].map(r=>parseInt(r.dataset.pin,10));
+    Promise.all(pins.map(pin => fetch('/api/schedule', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({pin,on,off,days})})))
+      .then(fetchStatus);
+  });
+
   // Sequence schedules
   document.getElementById('runSeqBtn').addEventListener('click', sequenceSchedules);
-
-  // Presets (keep your existing behavior here if you like)
-  var hfBtn = document.getElementById('presetHighfreq');
-if (hfBtn){
-  hfBtn.addEventListener('click', function(){
-    alert('High-Freq preset stub — implement to your preference.');
-  });
-}
   document.getElementById('disableAllSchedules')?.addEventListener('click', ()=>{
     fetch('/api/status').then(r=>r.json()).then(data=>{
       Promise.all(data.schedules.map(s=> fetch(`/api/schedule/${s.id}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:false})}) )).then(fetchStatus);
@@ -1888,10 +1858,9 @@ Launch the web interface and background scheduler with:
 
   sudo ./sprinkler.py web
 
-Navigate to http://<pi‑ip>:8000 to view current pin states, existing
-schedules, and to apply presets.  Use the “Season” button to apply
-your regular 30‑minute sequential schedule, or “High‑frequency” to
-apply the 20‑minute repeated schedule.
+Navigate to http://<pi‑ip>:8000 to view current pin states and
+schedules.  Use the “Season” button to apply your regular 30‑minute
+sequential schedule.
 
 Pin control from the command line
 ---------------------------------
@@ -1931,10 +1900,6 @@ Switching presets
 Apply the regular season preset (30‑minute sequential, garden on Tue/Thu/Sat):
 
   ./sprinkler.py preset season
-
-Apply the high‑frequency preset (20‑minute sequential runs at 00:00, 06:00, 12:00 and 18:00):
-
-  ./sprinkler.py preset highfreq
 
 Viewing status
 --------------
