@@ -1194,7 +1194,7 @@ function updateSchedules(schedules){
     dup.className = 'btn';
     dup.textContent = 'Duplicate';
     dup.style.marginLeft = '8px';
-    dup.title = 'Make a copy that starts at this schedule\'s OFF time with the same duration';
+    dup.title = "Make a copy that starts at this schedule's OFF time with the same duration";
     dup.addEventListener('click', (function(sRef){
       return function(){
         var onM  = parseHHMM(sRef.on);
