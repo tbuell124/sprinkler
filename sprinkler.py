@@ -927,7 +927,8 @@ input[type="number"]{width:90px}
           <div style="margin-top:8px; display:flex; gap:8px">
             <button id="addScheduleBtn" class="btn primary">Add</button>
             <button id="presetHighfreq" class="btn">High-Freq</button>
-            <button id="presetOffSeason" class="btn">Off Season</button>
+            <button id="disableAllSchedules" class="btn">Disable All</button>
+            <button id="deleteAllSchedules" class="btn">Delete All</button>
           </div>
         </div>
       </div>
@@ -977,6 +978,7 @@ function bySlotThenGpio(pins){
   spares.sort((a,b)=>a.pin - b.pin);
   return {slots, spares};
 }
+var countdownTimers = {};
 function fmtTime(s){
   var m = Math.floor(s/60), r = s % 60;
   return String(m) + ":" + String(r).padStart(2,'0');
@@ -1078,20 +1080,23 @@ fetch('/api/pin/' + p.pin + '/on?seconds=' + secs, {method:'POST'}).then(functio
   return row;
 }
 function startCountdown(pin, seconds){
+  if(countdownTimers[pin]){ clearInterval(countdownTimers[pin]); }
   var remaining = seconds;
   var el = document.getElementById('countdown-' + pin);
   if(!el) return;
   el.textContent = fmtTime(remaining);
-  var id = setInterval(function(){
+  countdownTimers[pin] = setInterval(function(){
     remaining--;
     if(remaining<=0){
-      clearInterval(id);
+      clearInterval(countdownTimers[pin]);
+      delete countdownTimers[pin];
       el.textContent = '';
     }else{
       el.textContent = fmtTime(remaining);
     }
   }, 1000);
 }
+
 }
 /* ========= Schedules ========= */
 function updateSchedules(schedules){
@@ -1316,9 +1321,15 @@ if (hfBtn){
     alert('High-Freq preset stub — implement to your preference.');
   });
 }
-  document.getElementById('presetOffSeason')?.addEventListener('click', ()=>{
+  document.getElementById('disableAllSchedules')?.addEventListener('click', ()=>{
     fetch('/api/status').then(r=>r.json()).then(data=>{
       Promise.all(data.schedules.map(s=> fetch(`/api/schedule/${s.id}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:false})}) )).then(fetchStatus);
+    });
+  });
+document.getElementById('deleteAllSchedules')?.addEventListener('click', ()=>{
+    if(!confirm('Delete all schedules?')) return;
+    fetch('/api/status').then(r=>r.json()).then(data=>{
+      Promise.all(data.schedules.map(s=> fetch(`/api/schedule/${s.id}`,{method:'DELETE'}) )).then(fetchStatus);
     });
   });
 
