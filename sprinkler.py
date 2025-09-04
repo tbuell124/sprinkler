@@ -1347,15 +1347,22 @@ function sequenceSchedules(){
   }
   let cur = start;
   const promises = [];
-  for(const s of currentSchedules){
-    const on = cur;
-    const off = cur + dur;
-    if(off >= 24*60){
-      alert('Sequence would cross midnight.');
-      return;
+  for (const s of currentSchedules) {
+    const on = cur % (24 * 60);
+    let off = on + dur;
+    if (off > 24 * 60) {
+      off = 24 * 60;
+      cur += 24 * 60 - on;
+    } else {
+      cur += dur;
     }
-    promises.push(fetch(`/api/schedule/${s.id}`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({on:toHHMM(on), off:toHHMM(off)})}));
-    cur = off;
+    promises.push(
+      fetch(`/api/schedule/${s.id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ on: toHHMM(on), off: toHHMM(off % (24 * 60)) })
+      })
+    );
   }
   Promise.all(promises).then(fetchStatus);
 }
