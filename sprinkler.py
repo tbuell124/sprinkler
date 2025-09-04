@@ -283,13 +283,19 @@ class PinManager:
         """Activate a pin and optionally schedule it to turn off."""
         with LOCK:
             dev = self.devices[int(pin)]
-            dev.on()
+            # Cancel any existing timer for this pin before activating it.
+            # Otherwise a previously scheduled callback could turn the pin
+            # off immediately after we turn it on, causing overlapping timers
+            # to fight each other.
             self._cancel_timer(pin)
+            dev.on()
             if seconds is not None and seconds > 0:
                 t = threading.Timer(seconds, self.off, args=(pin,))
                 t.daemon = True
-                t.start()
+                # Store the timer before starting it so a very short timer
+                # can't fire before being recorded.
                 self.pending_timers[pin] = t
+                t.start()
 
     def off(self, pin: int):
         """Deactivate a pin immediately."""
