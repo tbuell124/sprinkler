@@ -37,6 +37,7 @@ import os
 import sys
 import threading
 import uuid
+import re
 from datetime import datetime, timedelta
 from typing import Dict, List
 
@@ -104,15 +105,19 @@ except Exception:
 try:
     from apscheduler.schedulers.background import BackgroundScheduler  # type: ignore
     from apscheduler.triggers.cron import CronTrigger  # type: ignore
+    # Indicate that real APScheduler is available
+    HAS_APSCHEDULER = True
 except Exception:
     # If apscheduler is not available (e.g., in certain development
     # environments), define minimal stub classes so the module can be
     # imported without errors.  These stubs do nothing but satisfy the
-    # interface used by this script.
+    # interface used by this script.  We also mark that we are using a
+    # fallback scheduler.
     class BackgroundScheduler:
         def __init__(self, daemon: bool = True):
             self._jobs = []
         def start(self):
+            # stub does nothing
             pass
         def shutdown(self, wait: bool = False):
             pass
@@ -129,6 +134,8 @@ except Exception:
             self.day_of_week = day_of_week
             self.hour = hour
             self.minute = minute
+    # Real APScheduler not available; we will use fallback scheduling
+    HAS_APSCHEDULER = False
 
 # =========================
 # Web (Flask)
@@ -180,57 +187,41 @@ LOCK = threading.RLock()
 # whether the zone is active at startup (all zones are off by default).
 
 DEFAULT_CONFIG = {
-    "pins": {
-        "12": {"name": "Slot 1", "mode": "out", "active_high": True, "initial": False},
-        "16": {"name": "Slot 2", "mode": "out", "active_high": True, "initial": False},
-        "20": {"name": "Slot 3", "mode": "out", "active_high": True, "initial": False},
-        "21": {"name": "Slot 4", "mode": "out", "active_high": True, "initial": False},
-        "26": {"name": "Slot 5", "mode": "out", "active_high": True, "initial": False},
-        "19": {"name": "Slot 6", "mode": "out", "active_high": True, "initial": False},    
-        "13": {"name": "Slot 7", "mode": "out", "active_high": True, "initial": False},
-        "6":  {"name": "Slot 8", "mode": "out", "active_high": True, "initial": False},
-        "5":  {"name": "Slot 9", "mode": "out", "active_high": True, "initial": False}, 
-        "11": {"name": "Slot 10", "mode": "out", "active_high": True, "initial": False},
-        "9":  {"name": "Slot 11", "mode": "out", "active_high": True, "initial": False},
-        "10": {"name": "Slot 12", "mode": "out", "active_high": True, "initial": False},
-        "22": {"name": "Slot 13", "mode": "out", "active_high": True, "initial": False},
-        "27": {"name": "Slot 14", "mode": "out", "active_high": True, "initial": False},
-        "17": {"name": "Slot 15", "mode": "out", "active_high": True, "initial": False},
-        "4":  {"name": "Slot 16",  "mode": "out", "active_high": True, "initial": False},
-        "18": {"name": "Spare 1", "mode": "out", "active_high": True, "initial": False},  
-        "23": {"name": "Spare 2", "mode": "out", "active_high": True, "initial": False},
-        "24": {"name": "Spare 3", "mode": "out", "active_high": True, "initial": False},
-        "25": {"name": "Spare 4", "mode": "out", "active_high": True, "initial": False},
-        
-    },
+"pins": {
+    # ---- Slots 1–16 (left -> right exactly as on the board) ----
+    "12": {"name": "Slot 1 - Driveway",  "mode": "out", "active_high": True, "initial": False},
+    "16": {"name": "Slot 2 - Back Middle",  "mode": "out", "active_high": True, "initial": False},
+    "20": {"name": "Slot 3 - Deck Corner",  "mode": "out", "active_high": True, "initial": False},
+    "21": {"name": "Slot 4 - House Corner",  "mode": "out", "active_high": True, "initial": False},
+    "26": {"name": "Slot 5 - Front Middle",  "mode": "out", "active_high": True, "initial": False},
+    "19": {"name": "Slot 6 - Garden",  "mode": "out", "active_high": True, "initial": False},
+    "13": {"name": "Slot 7 - Side Back",  "mode": "out", "active_high": True, "initial": False},
+    "6":  {"name": "Slot 8 - Walkway",  "mode": "out", "active_high": True, "initial": False},
+    "5":  {"name": "Slot 9 - Front Right",  "mode": "out", "active_high": True, "initial": False},
+    "11": {"name": "Slot 10 - Side Front", "mode": "out", "active_high": True, "initial": False},
+    "9":  {"name": "Slot 11 - Side Middle", "mode": "out", "active_high": True, "initial": False},
+    "10": {"name": "Slot 12", "mode": "out", "active_high": True, "initial": False},
+    "22": {"name": "Slot 13", "mode": "out", "active_high": True, "initial": False},
+    "27": {"name": "Slot 14", "mode": "out", "active_high": True, "initial": False},
+    "17": {"name": "Slot 15", "mode": "out", "active_high": True, "initial": False},
+    "4":  {"name": "Slot 16", "mode": "out", "active_high": True, "initial": False},
+
+    # ---- Remaining controllable GPIOs as sequential Spares ----
+    # (All BCMs commonly available on the 40-pin header except those already used above)
+    "7":  {"name": "Spare 3",  "mode": "out", "active_high": True, "initial": False},
+    "8":  {"name": "Spare 4",  "mode": "out", "active_high": True, "initial": False},
+    "14": {"name": "Spare 5",  "mode": "out", "active_high": True, "initial": False},
+    "15": {"name": "Spare 6",  "mode": "out", "active_high": True, "initial": False},
+    "18": {"name": "Spare 7",  "mode": "out", "active_high": True, "initial": False},
+    "23": {"name": "Spare 8",  "mode": "out", "active_high": True, "initial": False},
+    "24": {"name": "Spare 9",  "mode": "out", "active_high": True, "initial": False},
+    "25": {"name": "Spare 10", "mode": "out", "active_high": True, "initial": False}
+},
     # Schedule definitions live in this list.  Preset commands will
     # repopulate this list.  Each entry contains: id, pin, on, off,
     # days (list of weekday numbers) and enabled.
     "schedules": [],
     "automation_enabled": True,
-    # Global system master switch.  When set to False the controller
-    # disables all automation, refuses new manual ON commands and
-    # immediately turns every zone off.  A value of True re‑enables
-    # automation and restores normal operation.  Toggling the system
-    # also updates automation_enabled accordingly.
-    "system_enabled": True,
-    # Order of pins displayed in the UI.  When missing, pins are
-    # sorted numerically.  This list holds the BCM numbers as strings
-    # corresponding to keys in the "pins" mapping.  Drag‑and‑drop
-    # reordering in the UI updates this list.
-    "pin_order": [],
-    # Order of schedule IDs.  When missing the order in the
-    # "schedules" list is used.  Drag‑and‑drop reordering updates this
-    # list.  Each value corresponds to the "id" of a schedule entry.
-    "schedule_order": [],
-    # Run log storing history of ON/OFF events.  Each element is a dict
-    # with keys: time (ISO8601 string), pin (int), action ('on'/'off'),
-    # trigger (manual, schedule, timer, system, etc.).  The log is
-    # truncated to the most recent log_max entries on every update.
-    "run_log": [],
-    # Maximum number of entries to retain in the run_log.  Older
-    # entries are dropped when the log grows beyond this size.
-    "log_max": 200,
     # NTP options for timedatectl integration.  Enabled controls
     # whether NTP is active; server selects the pool or host for
     # synchronisation.
@@ -257,19 +248,10 @@ DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 
 class PinManager:
-    """Wraps gpiozero DigitalOutputDevice for each configured pin.
-
-    A RunLog may be supplied to record every activation and
-    deactivation of a zone.  When provided, on() and off() will
-    create log entries capturing the pin number, the action ('on' or
-    'off') and the trigger string used to invoke the call (manual,
-    schedule, timer, system, etc.).
-    """
-    def __init__(self, config: dict, run_log: 'RunLog | None' = None):
+    """Wraps gpiozero DigitalOutputDevice for each configured pin."""
+    def __init__(self, config: dict):
         self.devices: Dict[int, DigitalOutputDevice] = {}
-        # timers keyed by pin number for manual pulses
         self.pending_timers: Dict[int, threading.Timer] = {}
-        self.run_log: RunLog | None = run_log
         self._build_from_config(config)
 
     def _build_from_config(self, config: dict):
@@ -297,55 +279,23 @@ class PinManager:
             )
         return out
 
-    def on(self, pin: int, seconds: int | None = None, trigger: str = "manual"):
-        """Activate a pin and optionally schedule it to turn off.
-
-        Parameters:
-          pin: BCM pin number to activate.
-          seconds: Optional duration after which the pin will be turned
-            off automatically.  If provided, the same trigger string is
-            forwarded to the off() call when the timer expires.
-          trigger: Human readable source of the call ('manual', 'schedule',
-            'timer', 'system', etc.) which is recorded in the run log.
-        """
+    def on(self, pin: int, seconds: int = None):
+        """Activate a pin and optionally schedule it to turn off."""
         with LOCK:
             dev = self.devices[int(pin)]
             dev.on()
-            # record log
-            if self.run_log:
-                try:
-                    self.run_log.add_event(pin, "on", trigger)
-                except Exception:
-                    pass
             self._cancel_timer(pin)
             if seconds is not None and seconds > 0:
-                # schedule off() with same trigger; in this context the
-                # trigger is likely manual (manual-run), so we propagate
-                def _off_wrapper():
-                    try:
-                        self.off(pin, trigger=trigger)
-                    except Exception:
-                        pass
-                t = threading.Timer(seconds, _off_wrapper)
+                t = threading.Timer(seconds, self.off, args=(pin,))
                 t.daemon = True
                 t.start()
                 self.pending_timers[pin] = t
 
-    def off(self, pin: int, trigger: str = "manual"):
-        """Deactivate a pin immediately.
-
-        Parameters:
-          trigger: Human readable source of the call ('manual', 'schedule',
-            'timer', 'system', etc.) recorded in the run log.
-        """
+    def off(self, pin: int):
+        """Deactivate a pin immediately."""
         with LOCK:
             dev = self.devices[int(pin)]
             dev.off()
-            if self.run_log:
-                try:
-                    self.run_log.add_event(pin, "off", trigger)
-                except Exception:
-                    pass
             self._cancel_timer(pin)
 
     def _cancel_timer(self, pin: int):
@@ -379,37 +329,6 @@ def load_config() -> dict:
     for pin, meta in DEFAULT_CONFIG.get("pins", {}).items():
         if pin not in cfg.get("pins", {}):
             cfg.setdefault("pins", {})[pin] = meta
-
-    # Provide sensible defaults for newly introduced fields.  Pin order
-    # defaults to all configured pins sorted numerically when not
-    # present or empty.  Schedule order defaults to the order of
-    # schedules in the list.  The run_log is always initialised to an
-    # empty list if absent.  The system master flag defaults to True.
-    # log_max defaults to the configured default value.
-    if not cfg.get("pin_order"):
-        # Convert keys to ints for correct numerical sort then back to
-        # strings to match stored key type
-        cfg["pin_order"] = [str(p) for p in sorted([int(x) for x in cfg.get("pins", {}).keys()])]
-    # Ensure schedule_order exists and contains all known schedule ids
-    if not cfg.get("schedule_order"):
-        cfg["schedule_order"] = [s.get("id") for s in cfg.get("schedules", []) if s.get("id")]
-    else:
-        # Remove ids no longer present (e.g. after deletion) and append
-        # new ids at the end
-        existing_ids = {s.get("id") for s in cfg.get("schedules", [])}
-        new_order = [i for i in cfg["schedule_order"] if i in existing_ids]
-        # Append any schedules not already in the order
-        for s in cfg.get("schedules", []):
-            sid = s.get("id")
-            if sid and sid not in new_order:
-                new_order.append(sid)
-        cfg["schedule_order"] = new_order
-    if "run_log" not in cfg:
-        cfg["run_log"] = []
-    if "system_enabled" not in cfg:
-        cfg["system_enabled"] = True
-    if "log_max" not in cfg:
-        cfg["log_max"] = DEFAULT_CONFIG.get("log_max", 200)
     return cfg
 
 
@@ -425,31 +344,146 @@ def save_config(cfg: dict):
 class SprinklerScheduler:
     """Manage cron jobs for each schedule entry with rain delay support."""
 
-    def __init__(self, pinman: PinManager, cfg: dict, rain: RainDelayManager | None = None, run_log: 'RunLog | None' = None):
+    def __init__(self, pinman: PinManager, cfg: dict, rain: RainDelayManager | None = None):
         self.pinman = pinman
         self.cfg = cfg
+        # Optional RainDelayManager; if provided, ON jobs will consult
+        # this manager before activating a pin.  If None, no rain
+        # checking occurs.
         self.rain = rain
-        # Optional run log used by schedule wrappers to attribute
-        # activations/deactivations.  Currently unused directly
-        # because PinManager handles logging itself when called with
-        # appropriate trigger arguments.
-        self.run_log = run_log
-        # Initialise underlying APScheduler.  When timezone support is
-        # available we rely on the scheduler default; older versions or
-        # stub implementations ignore timezone arguments.  See docs for
-        # details.
+        # Use the system's local timezone for all scheduled jobs where
+        # supported.  Some older versions or stub implementations of
+        # BackgroundScheduler do not accept a `timezone` keyword argument.
+        # Attempt to supply the local timezone; if unsupported, fall back
+        # to the default behaviour (which should use local time by default)【559723678597216†L42-L46】.
+        local_tz = None
+        try:
+            local_tz = datetime.now().astimezone().tzinfo
+        except Exception:
+            local_tz = None
         try:
             self.sched = BackgroundScheduler(daemon=True)
-        except Exception:
-            # fallback to stub scheduler
+        except TypeError:
+            # fallback for environments where BackgroundScheduler
+            # doesn't accept a timezone parameter
             self.sched = BackgroundScheduler(daemon=True)
+
+        # Determine whether we're running with the real APScheduler or a
+        # fallback stub.  When the stub is used, scheduled jobs are not
+        # executed, so we implement our own polling loop to turn pins
+        # on and off at the appropriate times.  See issue raised in
+        # user feedback regarding schedules not firing.
+        self.use_fallback = not HAS_APSCHEDULER
+        # Polling thread state for fallback scheduler
+        self._poll_thread: threading.Thread | None = None
+        self._stop_poll = False
 
     def start(self):
         self.sched.start()
         self.reload_jobs()
+        # If using fallback scheduling, start a background thread to
+        # poll for schedule events every minute.  Without this, jobs
+        # defined via the stub BackgroundScheduler will never run.
+        if self.use_fallback:
+            self._start_poll_thread()
 
     def shutdown(self):
         self.sched.shutdown(wait=False)
+        # Stop polling thread if running
+        if self.use_fallback:
+            self._stop_poll = True
+            # Wait briefly for thread to exit
+            t = self._poll_thread
+            if t and t.is_alive():
+                try:
+                    t.join(timeout=1.0)
+                except Exception:
+                    pass
+
+    def _start_poll_thread(self) -> None:
+        """Spawn a thread that polls the schedule configuration every minute.
+
+        When APScheduler is unavailable (fallback mode), this thread
+        periodically checks the current day of week and time against the
+        configured schedules.  If a schedule is enabled and the current
+        time matches its on or off time, the corresponding action is
+        executed (respecting rain delay and automation settings).
+        """
+        if self._poll_thread and self._poll_thread.is_alive():
+            return
+        self._stop_poll = False
+        self._poll_thread = threading.Thread(target=self._poll_loop, daemon=True)
+        self._poll_thread.start()
+
+    def _poll_loop(self) -> None:
+        """Fallback scheduling loop.
+
+        Runs in a background thread to turn pins on or off at the
+        configured times when APScheduler isn't available.  The loop
+        wakes up roughly every 30 seconds and checks the current
+        hour:minute and weekday against each active schedule.  It
+        respects the global automation_enabled flag and rain delay via
+        the _maybe_on() wrapper.  Off events directly call the
+        PinManager.off() method.
+        """
+        import time
+        while not self._stop_poll:
+            try:
+                now = datetime.now()
+                # Python weekday(): Monday=0, Sunday=6 which matches
+                # our backend's convention.
+                day_idx = now.weekday()
+                current_time = now.strftime("%H:%M")
+                # Acquire lock to safely read config and state
+                with LOCK:
+                    # Skip all events when automation is disabled
+                    if not self.cfg.get("automation_enabled", True):
+                        pass
+                    else:
+                        for entry in self.cfg.get("schedules", []):
+                            if not entry.get("enabled", True):
+                                continue
+                            try:
+                                pin = int(entry["pin"])
+                            except Exception:
+                                continue
+                            days = entry.get("days")
+                            if days is None:
+                                days = list(range(7))
+                            try:
+                                # Coerce days to ints; ignore invalid
+                                day_list = [int(d) for d in days]
+                            except Exception:
+                                day_list = []
+                            if day_idx not in day_list:
+                                continue
+                            on_time = str(entry.get("on", "")).strip()
+                            off_time = str(entry.get("off", "")).strip()
+                            # Compare times at minute resolution
+                            if on_time == current_time:
+                                # Attempt to turn on the pin; handle rain delay
+                                try:
+                                    self._maybe_on(pin)
+                                except Exception:
+                                    pass
+                            if off_time == current_time:
+                                # Turn off without rain delay
+                                try:
+                                    self.pinman.off(pin)
+                                except Exception:
+                                    pass
+            except Exception:
+                # Log any unexpected error but continue looping
+                try:
+                    print("[PollLoopError]", sys.exc_info()[1])
+                except Exception:
+                    pass
+            # Sleep until approximately the next minute to reduce CPU usage.
+            # Sleep 30 seconds as a compromise between precision and overhead.
+            for _ in range(30):
+                if self._stop_poll:
+                    break
+                time.sleep(1)
 
     def _maybe_on(self, pin: int):
         """Called by scheduled ON jobs; respects rain delay."""
@@ -464,8 +498,7 @@ class SprinklerScheduler:
             # silently skipping.  Log the exception for visibility.
             print(f"[RainDelayError] {e}; proceeding with watering")
         # No delay; activate the pin
-        # Use a 'schedule' trigger so the run log records the origin
-        self.pinman.on(pin, trigger="schedule")
+        self.pinman.on(pin)
 
     def reload_jobs(self):
         """Rebuild all APScheduler jobs based on the current schedule config.
@@ -524,16 +557,9 @@ class SprinklerScheduler:
                     )
                     # OFF job
                     trig_off = CronTrigger(day_of_week=di, hour=off_hour, minute=off_minute)
-                    # schedule a wrapper that calls off() with the
-                    # appropriate schedule trigger.  Using a lambda
-                    # ensures the trigger string is bound correctly.
-                    def _off_wrapper(p=pin):
-                        try:
-                            self.pinman.off(p, trigger="schedule")
-                        except Exception:
-                            pass
                     self.sched.add_job(
-                        _off_wrapper,
+                        self.pinman.off,
+                        args=[pin],
                         trigger=trig_off,
                         id=f"{entry['id']}-off-{di}",
                         replace_existing=True,
@@ -719,1240 +745,618 @@ class RainDelayManager:
         }
 
 
-# =========================
-# Run log
-# =========================
-class RunLog:
-    """Maintain a rolling log of zone activations and deactivations.
-
-    The log persists into the config dictionary under the 'run_log'
-    key.  Each entry is a dictionary with the following keys:
-
-      • time: ISO8601 timestamp when the event occurred (local time)
-      • pin: GPIO pin (int)
-      • action: 'on' or 'off'
-      • trigger: a short string describing the origin (e.g. 'manual',
-        'schedule', 'timer', 'system')
-
-    The size of the log is capped to cfg['log_max'] entries.  Older
-    entries are dropped on insert.  All updates persist the config via
-    save_config() so logs survive restarts.
-    """
-
-    def __init__(self, cfg: dict):
-        self.cfg = cfg
-        # ensure keys exist
-        cfg.setdefault("run_log", [])
-        cfg.setdefault("log_max", DEFAULT_CONFIG.get("log_max", 200))
-
-    def add_event(self, pin: int, action: str, trigger: str = "manual"):
-        now = datetime.now().astimezone().isoformat()
-        entry = {
-            "time": now,
-            "pin": int(pin),
-            "action": str(action),
-            "trigger": str(trigger),
-        }
-        with LOCK:
-            log = self.cfg.setdefault("run_log", [])
-            log.append(entry)
-            # Truncate old entries if log exceeds max
-            max_len = int(self.cfg.get("log_max", DEFAULT_CONFIG.get("log_max", 200)))
-            if len(log) > max_len:
-                # remove oldest entries
-                del log[0 : len(log) - max_len]
-            save_config(self.cfg)
-
-    def get_events(self, n: int | None = None, pin: int | None = None, since: str | None = None):
-        """Return a slice of log entries.
-
-        Parameters:
-          n: Maximum number of entries to return (latest first).  If None,
-             returns all available.  Negative values behave like None.
-          pin: If provided, filter entries to the specified pin.
-          since: ISO8601 timestamp; if provided, only include entries
-             after this moment.  Parsing errors fallback to including all.
-        Returns a list sorted from most recent to oldest.
-        """
-        with LOCK:
-            events = list(self.cfg.get("run_log", []))
-        # Filter by pin
-        if pin is not None:
-            events = [e for e in events if int(e.get("pin")) == int(pin)]
-        # Filter by since
-        if since:
-            try:
-                since_dt = datetime.fromisoformat(since)
-                events = [e for e in events if datetime.fromisoformat(e.get("time")) > since_dt]
-            except Exception:
-                pass
-        # Return newest first
-        events = list(reversed(events))
-        if n and n > 0:
-            events = events[:n]
-        return events
-
-
-def build_app(cfg: dict, pinman: PinManager, sched: SprinklerScheduler, rain: RainDelayManager | None = None, run_log: 'RunLog | None' = None) -> Flask:
+def build_app(cfg: dict, pinman: PinManager, sched: SprinklerScheduler, rain: RainDelayManager | None = None) -> Flask:
     """Construct the Flask application for the web UI.
 
     A RainDelayManager may be passed to expose rain status and allow
     adjustments via the web interface.  When rain is None, rain
     endpoints return empty values and controls are disabled.
-
-    The run_log instance, when provided, exposes a rolling history of
-    activations and deactivations via the /api/log endpoint and the
-    /run-log page.  If omitted, the log endpoints return empty lists.
     """
     app = Flask(__name__)
     # Inline HTML for the modernised UI.  The page uses a dark theme with
     # white text and organises controls for each pin (zone), allows
     # renaming, manual run timers and schedule management.  Schedule IDs
     # are hidden from view but used internally for updates and deletion.
-    # Modernised UI HTML.  See above for explanation.
-    HTML = """<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <title>Sprinkler Controller</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <style>
-    body { font-family: system-ui,sans-serif; background:#0b0f14; color:#e6edf3; margin:0; padding:0; }
-    .nav { padding:10px 20px; background:#10161d; display:flex; gap:20px; align-items:center; }
-    .nav a { color:#58a6ff; text-decoration:none; font-weight:bold; }
-    .nav .spacer { flex:1; }
-    .badge { padding:4px 8px; border-radius:6px; font-size:0.8rem; margin-right:8px; }
-    .badge.on { background:#2ecc71; color:#0b0f14; }
-    .badge.off { background:#e74c3c; color:white; }
-    .badge.disabled { background:#7f8c8d; color:#0b0f14; }
-    .badge.active { background:#f1c40f; color:#0b0f14; }
-    .card { background:#10161d; margin:20px; padding:16px; border-radius:12px; box-shadow:0 0 0 1px #1e2936; }
-    details summary { cursor:pointer; font-size:1.2rem; font-weight:bold; outline:none; }
-    button { padding:8px 14px; border:0; border-radius:8px; cursor:pointer; font-size:0.9rem; }
-    button.on { background:#2ecc71; color:#0b0f14; }
-    button.off { background:#e74c3c; color:white; }
-    button.muted { background:#233040; color:#9fb1c1; }
-    button.gray { background:#555; color:#ddd; }
-    input, select { background:#0b0f14; color:#e6edf3; border:1px solid #1e2936; border-radius:6px; padding:6px; font-size:0.9rem; }
-    table { width:100%; border-collapse:collapse; margin-top:10px; }
-    th, td { padding:6px; border-bottom:1px solid #1e2936; font-size:0.85rem; text-align:left; }
-    tr.dragging { opacity:0.5; }
-    .pin-row { border:1px solid #1e2936; border-radius:8px; padding:10px; margin-bottom:12px; background:#0f141b; }
-    .pin-row.dragging { opacity:0.6; }
-    .pin-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; }
-    .schedule-controls { display:flex; align-items:center; gap:8px; margin-bottom:10px; flex-wrap:wrap; }
-    .preset-buttons { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
-    @media (max-width:600px) {
-      .pin-header, .schedule-controls, .preset-buttons { flex-direction:column; align-items:flex-start; }
-      button { width:100%; margin-top:6px; }
-    }
-  </style>
-</head>
-<body>
-  <div class="nav">
-    <span style="font-size:1.2rem;font-weight:bold;color:#e6edf3;">Sprinkler Controller</span>
-    <div class="spacer"></div>
-    <a href="/">Home</a>
-    <a href="/run-log">Run Log</a>
-  </div>
-  <div style="padding:0 20px;">
-    <div id="statusBadges" style="margin-top:10px;"></div>
-  </div>
-  <details open>
-    <summary>Pins</summary>
-    <div id="pinsContainer" style="padding:0 20px;"></div>
-  </details>
-  <details open>
-    <summary>Schedules</summary>
-    <div style="padding:0 20px;">
-      <div class="schedule-controls">
-        <label>Filter <input id="schedFilter" placeholder="Start time filter e.g. 22:" style="width:130px;"></label>
-        <button class="muted" onclick="clearFilter()">Clear</button>
-      </div>
-      <div style="margin-bottom:10px;">
-        <strong>Add Schedule:</strong><br/>
-        <label>Pin <select id="addPin"></select></label>
-        <label>On <input id="addOn" type="text" placeholder="HH:MM" style="width:80px;"></label>
-        <label>Off <input id="addOff" type="text" placeholder="HH:MM" style="width:80px;"></label>
-        <label>Days</label>
-        <div id="addDaysContainer" style="display:flex;gap:4px;margin-top:4px;flex-wrap:wrap;"></div>
-        <button class="muted" onclick="addSchedule()">Add</button>
-      </div>
-      <table id="schedTable"></table>
-      <div style="margin-top:8px;">
-        <button class="muted" onclick="saveAll()">Save All</button>
-      </div>
-      <div class="preset-buttons">
-        <button class="muted" onclick="applyStandard()">Standard schedule</button>
-        <button class="off" onclick="deleteAllSchedules()">Delete All</button>
-        <button class="muted" onclick="disableAllSchedules()">Disable All</button>
-      </div>
-    </div>
-  </details>
-  <details open>
-    <summary>Rain Delay</summary>
-    <div id="rainSection" style="padding:0 20px;">
-      <div id="rainInfo">Loading...</div>
-      <div style="margin-top:10px;" id="rainControls">
-        <label>Threshold (%) <input id="rainThreshold" style="width:60px" /></label>
-        <button class="muted" onclick="setRain()">Set Threshold</button>
-        <button class="on" onclick="enableRain()">Enable</button>
-        <button class="off" onclick="disableRain()">Disable</button>
-      </div>
-    </div>
-  </details>
-</body>
-<script>
-// Modern Sprinkler UI JavaScript
-const DAY_NAMES = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
-let editingCount = 0;
-function incEditing(){ editingCount++; }
-function decEditing(){ if(editingCount>0) editingCount--; }
-let schedSortKey = null;
-let schedSortAsc = true;
-let schedFilterStr = '';
-async function fetchJson(url, opts={}) {
-  const resp = await fetch(url, opts);
-  if(!resp.ok) {
-    const txt = await resp.text();
-    throw new Error(txt || 'Request failed');
-  }
-  return await resp.json();
-}
-async function refresh() {
-  try {
-    const status = await fetchJson('/api/status');
-    const rainData = await fetchJson('/api/rain');
-    renderStatus(status, rainData);
-    renderPins(status.pins, status.system_enabled, status.automation_enabled);
-    renderSchedules(status.schedules);
-    renderRain(rainData);
-  } catch(e) {
-    console.error(e);
-  }
-}
-function renderStatus(status, rain) {
-  const cont = document.getElementById('statusBadges');
-  cont.innerHTML = '';
-  const sys = document.createElement('span');
-  sys.className = 'badge ' + (status.system_enabled ? 'on' : 'off');
-  sys.textContent = 'System: ' + (status.system_enabled ? 'ON' : 'OFF');
-  cont.appendChild(sys);
-  const auto = document.createElement('span');
-  auto.className = 'badge ' + (status.automation_enabled ? 'on' : 'off');
-  auto.textContent = 'Automation: ' + (status.automation_enabled ? 'ENABLED' : 'DISABLED');
-  cont.appendChild(auto);
-  if (rain && typeof rain.enabled !== 'undefined') {
-    const rb = document.createElement('span');
-    if(!rain.enabled) {
-      rb.className = 'badge disabled';
-      rb.textContent = 'Rain Delay: OFF';
-    } else if (rain.active) {
-      rb.className = 'badge active';
-      rb.textContent = 'Rain Delay: ACTIVE';
-    } else {
-      rb.className = 'badge on';
-      rb.textContent = 'Rain Delay: ON';
-    }
-    cont.appendChild(rb);
-  }
-}
-function renderPins(pins, systemEnabled, autoEnabled) {
-  const container = document.getElementById('pinsContainer');
-  container.innerHTML = '';
-  const addPinSel = document.getElementById('addPin');
-  addPinSel.innerHTML = '';
-  pins.forEach((p, idx) => {
-    const opt = document.createElement('option');
-    opt.value = p.pin;
-    opt.textContent = p.pin + ' (' + p.name + ')';
-    addPinSel.appendChild(opt);
-    const row = document.createElement('div');
-    row.className = 'pin-row';
-    row.setAttribute('draggable','true');
-    row.dataset.pin = p.pin;
-    const header = document.createElement('div');
-    header.className = 'pin-header';
-    const title = document.createElement('div');
-    title.innerHTML = '<strong>GPIO ' + p.pin + '</strong>';
-    header.appendChild(title);
-    if(idx === 0) {
-      const sysToggle = document.createElement('div');
-      sysToggle.style.marginLeft = 'auto';
-      const btn = document.createElement('button');
-      if(systemEnabled) {
-        btn.className = 'off';
-        btn.textContent = 'Turn System OFF';
-        btn.onclick = () => setSystem(false);
-      } else {
-        btn.className = 'on';
-        btn.textContent = 'Turn System ON';
-        btn.onclick = () => setSystem(true);
-      }
-      sysToggle.appendChild(btn);
-      header.appendChild(sysToggle);
-    }
-    row.appendChild(header);
-    const nameRow = document.createElement('div');
-    nameRow.style.marginBottom = '6px';
-    const nameLabel = document.createElement('span');
-    nameLabel.textContent = 'Name: ';
-    nameRow.appendChild(nameLabel);
-    const nameInput = document.createElement('input');
-    nameInput.value = p.name;
-    nameInput.style.width = '160px';
-    nameInput.id = 'name-' + p.pin;
-    nameInput.onfocus = incEditing;
-    nameInput.onblur = decEditing;
-    nameRow.appendChild(nameInput);
-    const saveBtn = document.createElement('button');
-    saveBtn.className = 'muted';
-    saveBtn.style.marginLeft = '4px';
-    saveBtn.textContent = 'Save';
-    saveBtn.onclick = () => { saveName(p.pin); };
-    nameRow.appendChild(saveBtn);
-    row.appendChild(nameRow);
-    const stateRow = document.createElement('div');
-    stateRow.style.display = 'flex';
-    stateRow.style.alignItems = 'center';
-    stateRow.style.flexWrap = 'wrap';
-    const stateTxt = document.createElement('span');
-    stateTxt.textContent = 'State: ' + (p.is_active ? 'ON' : 'OFF');
-    stateTxt.style.marginRight = '10px';
-    stateRow.appendChild(stateTxt);
-    const btnOn = document.createElement('button');
-    btnOn.className = 'on';
-    btnOn.textContent = 'On';
-    btnOn.disabled = !systemEnabled;
-    btnOn.onclick = () => { fetch('/api/pin/' + p.pin + '/on', {method:'POST'}).then(refresh).catch(()=>{}); };
-    stateRow.appendChild(btnOn);
-    const btnOff = document.createElement('button');
-    btnOff.className = 'off';
-    btnOff.textContent = 'Off';
-    btnOff.style.marginLeft = '4px';
-    btnOff.onclick = () => { fetch('/api/pin/' + p.pin + '/off', {method:'POST'}).then(refresh).catch(()=>{}); };
-    stateRow.appendChild(btnOff);
-    const manLabel = document.createElement('span');
-    manLabel.style.marginLeft = '12px';
-    manLabel.textContent = 'Minutes:';
-    stateRow.appendChild(manLabel);
-    const manInput = document.createElement('input');
-    manInput.type = 'number';
-    manInput.min = '1';
-    manInput.max = '180';
-    manInput.step = '1';
-    manInput.style.width = '60px';
-    manInput.value = '10';
-    manInput.id = 'manual-' + p.pin;
-    manInput.onfocus = incEditing;
-    manInput.onblur = decEditing;
-    stateRow.appendChild(manInput);
-    const manBtn = document.createElement('button');
-    manBtn.className = 'muted';
-    manBtn.style.marginLeft = '4px';
-    manBtn.textContent = 'Start';
-    manBtn.disabled = !systemEnabled;
-    manBtn.onclick = () => {
-      const mins = parseFloat(document.getElementById('manual-' + p.pin).value);
-      if(!isFinite(mins) || mins <= 0) { alert('Enter minutes > 0'); return; }
-      const secs = Math.round(mins * 60);
-      fetch('/api/pin/' + p.pin + '/on?seconds=' + secs, {method:'POST'}).then(refresh).catch(()=>{});
-    };
-    stateRow.appendChild(manBtn);
-    row.appendChild(stateRow);
-    container.appendChild(row);
-  });
-  enableDragOrdering(container, '.pin-row', (order) => {
-    fetch('/api/reorder', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({pin_order: order})});
-  });
-}
-function renderSchedules(schedules) {
-  const table = document.getElementById('schedTable');
-  table.innerHTML = '';
-  const headerRow = document.createElement('tr');
-  const cols = [
-    {key:'pin', label:'Pin (Name)'},
-    {key:'on', label:'On'},
-    {key:'off', label:'Off'},
-    {key:'next_run', label:'Next'},
-    {key:'days', label:'Days'},
-    {key:'enabled', label:'Enabled'},
-    {key:'actions', label:'Actions'}
-  ];
-  cols.forEach(col => {
-    const th = document.createElement('th');
-    th.textContent = col.label;
-    if(['pin','on','off','next_run'].includes(col.key)) {
-      th.style.cursor = 'pointer';
-      th.onclick = () => {
-        if(schedSortKey === col.key) {
-          schedSortAsc = !schedSortAsc;
-        } else {
-          schedSortKey = col.key;
-          schedSortAsc = true;
-        }
-        renderSchedules(schedules);
-      };
-    }
-    headerRow.appendChild(th);
-  });
-  table.appendChild(headerRow);
-  let filtered = schedules;
-  if(schedFilterStr && schedFilterStr.trim() !== '') {
-    const f = schedFilterStr.trim().toLowerCase();
-    filtered = schedules.filter(s => s.on.toLowerCase().startsWith(f));
-  }
-  if(schedSortKey) {
-    filtered = filtered.slice().sort((a,b) => {
-      let av = a[schedSortKey];
-      let bv = b[schedSortKey];
-      if(schedSortKey === 'pin') { av = a.pin; bv = b.pin; }
-      if(av < bv) return schedSortAsc ? -1 : 1;
-      if(av > bv) return schedSortAsc ? 1 : -1;
-      return 0;
-    });
-  }
-  filtered.forEach(s => {
-    const tr = document.createElement('tr');
-    tr.setAttribute('draggable','true');
-    tr.dataset.id = s.id;
-    const tdPin = document.createElement('td');
-    tdPin.textContent = s.pin + ' (' + s.pin_name + ')';
-    tr.appendChild(tdPin);
-    const tdOn = document.createElement('td');
-    const inpOn = document.createElement('input');
-    inpOn.value = s.on;
-    inpOn.style.width = '70px';
-    inpOn.id = 'on-' + s.id;
-    inpOn.onfocus = incEditing;
-    inpOn.onblur = decEditing;
-    tdOn.appendChild(inpOn);
-    tr.appendChild(tdOn);
-    const tdOff = document.createElement('td');
-    const inpOff = document.createElement('input');
-    inpOff.value = s.off;
-    inpOff.style.width = '70px';
-    inpOff.id = 'off-' + s.id;
-    inpOff.onfocus = incEditing;
-    inpOff.onblur = decEditing;
-    tdOff.appendChild(inpOff);
-    tr.appendChild(tdOff);
-    const tdNext = document.createElement('td');
-    tdNext.textContent = s.next_run || '';
-    tr.appendChild(tdNext);
-    const tdDays = document.createElement('td');
-    const daysDiv = document.createElement('div');
-    daysDiv.style.display = 'flex';
-    daysDiv.style.flexWrap = 'wrap';
-    daysDiv.style.gap = '4px';
-    for(let d=0; d<7; d++) {
-      const lbl = document.createElement('label');
-      lbl.style.display='flex'; lbl.style.alignItems='center'; lbl.style.marginRight='4px';
-      const cb = document.createElement('input');
-      cb.type='checkbox';
-      cb.value=d;
-      cb.id = 'days-' + s.id + '-' + d;
-      if(Array.isArray(s.days) && s.days.includes(d)) cb.checked=true;
-      cb.onfocus = incEditing;
-      cb.onblur = decEditing;
-      lbl.appendChild(cb);
-      lbl.appendChild(document.createTextNode(DAY_NAMES[d]));
-      daysDiv.appendChild(lbl);
-    }
-    tdDays.appendChild(daysDiv);
-    tr.appendChild(tdDays);
-    const tdEn = document.createElement('td');
-    const chk = document.createElement('input');
-    chk.type='checkbox';
-    chk.id = 'enabled-' + s.id;
-    chk.checked = s.enabled;
-    chk.onfocus = incEditing;
-    chk.onblur = decEditing;
-    tdEn.appendChild(chk);
-    tr.appendChild(tdEn);
-    const tdAct = document.createElement('td');
-    const saveBtn = document.createElement('button');
-    saveBtn.className = 'muted';
-    saveBtn.textContent = 'Save';
-    saveBtn.onclick = () => {
-      const newOn = document.getElementById('on-' + s.id).value;
-      const newOff = document.getElementById('off-' + s.id).value;
-      const enVal = document.getElementById('enabled-' + s.id).checked;
-      const daysArr = [];
-      for(let d=0; d<7; d++) {
-        const cb = document.getElementById('days-' + s.id + '-' + d);
-        if(cb && cb.checked) daysArr.push(d);
-      }
-      fetch('/api/schedule/' + s.id, {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({on:newOn, off:newOff, days:daysArr, enabled:enVal})
-      }).then(resp => {
-        if(!resp.ok) {
-          resp.text().then(t => alert(t));
-        }
-        refresh();
-      });
-    };
-    tdAct.appendChild(saveBtn);
-    const delBtn = document.createElement('button');
-    delBtn.className = 'off';
-    delBtn.style.marginLeft='4px';
-    delBtn.textContent = 'Delete';
-    delBtn.onclick = () => {
-      if(confirm('Delete this schedule?')) {
-        fetch('/api/schedule/' + s.id, {method:'DELETE'}).then(refresh).catch(()=>{});
-      }
-    };
-    tdAct.appendChild(delBtn);
-    tr.appendChild(tdAct);
-    table.appendChild(tr);
-  });
-  enableDragOrdering(table, 'tr[data-id]', (order) => {
-    fetch('/api/reorder', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({schedule_order: order})});
-  });
-}
-function enableDragOrdering(container, selector, callback) {
-  let dragged;
-  container.querySelectorAll(selector).forEach(item => {
-    item.addEventListener('dragstart', function(e){ dragged=this; this.classList.add('dragging'); e.dataTransfer.effectAllowed='move'; });
-    item.addEventListener('dragend', function(){ this.classList.remove('dragging'); });
-    item.addEventListener('dragover', function(e){ if(e.preventDefault) e.preventDefault(); return false; });
-    item.addEventListener('drop', function(e){ e.stopPropagation(); if(dragged && dragged !== this){
-      const items = Array.from(container.querySelectorAll(selector));
-      const draggedIndex = items.indexOf(dragged);
-      const dropIndex = items.indexOf(this);
-      if(draggedIndex < dropIndex) {
-        container.insertBefore(dragged, this.nextSibling);
-      } else {
-        container.insertBefore(dragged, this);
-      }
-      const order = Array.from(container.querySelectorAll(selector)).map(el => el.dataset.pin || el.dataset.id);
-      if(callback) callback(order);
-    }
-    return false; });
-  });
-}
-function saveAll() {
-  const pinRows = document.querySelectorAll('.pin-row');
-  const pinsData = [];
-  pinRows.forEach(row => {
-    const pin = parseInt(row.dataset.pin);
-    const name = document.getElementById('name-' + pin).value.trim();
-    pinsData.push({pin: pin, name: name});
-  });
-  const scheduleRows = document.querySelectorAll('#schedTable tr[data-id]');
-  const schedulesData = [];
-  scheduleRows.forEach(tr => {
-    const id = tr.dataset.id;
-    const onVal = document.getElementById('on-' + id).value;
-    const offVal = document.getElementById('off-' + id).value;
-    const enVal = document.getElementById('enabled-' + id).checked;
-    const daysArr = [];
-    for(let d=0; d<7; d++) {
-      const cb = document.getElementById('days-' + id + '-' + d);
-      if(cb && cb.checked) daysArr.push(d);
-    }
-    schedulesData.push({id: id, on: onVal, off: offVal, days: daysArr, enabled: enVal});
-  });
-  const pinOrder = Array.from(document.querySelectorAll('.pin-row')).map(el => el.dataset.pin);
-  const scheduleOrder = Array.from(document.querySelectorAll('#schedTable tr[data-id]')).map(el => el.dataset.id);
-  fetch('/api/save_all', {
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({pins: pinsData, schedules: schedulesData, pin_order: pinOrder, schedule_order: scheduleOrder})
-  }).then(resp => {
-    if(!resp.ok) resp.text().then(t => alert(t));
-    refresh();
-  }).catch(err => alert(err));
-}
-function applyStandard() {
-  if(!confirm('Apply standard schedule? This will replace all existing schedules.')) return;
-  fetch('/api/preset/standard', {method:'POST'}).then(refresh).catch(()=>{});
-}
-function deleteAllSchedules() {
-  if(!confirm('Delete all schedules?')) return;
-  fetch('/api/schedules/delete_all', {method:'POST'}).then(refresh).catch(()=>{});
-}
-function disableAllSchedules() {
-  if(!confirm('Disable all schedules?')) return;
-  fetch('/api/schedules/disable_all', {method:'POST'}).then(refresh).catch(()=>{});
-}
-const filterInput = document.getElementById('schedFilter');
-if(filterInput) {
-  filterInput.addEventListener('input', () => {
-    schedFilterStr = filterInput.value;
-    refresh();
-  });
-}
-function clearFilter() {
-  schedFilterStr = '';
-  const fi = document.getElementById('schedFilter');
-  if(fi) fi.value = '';
-  refresh();
-}
-function addSchedule() {
-  const pin = parseInt(document.getElementById('addPin').value);
-  const onVal = document.getElementById('addOn').value;
-  const offVal = document.getElementById('addOff').value;
-  const daysCbs = document.querySelectorAll('#addDaysContainer input[type="checkbox"]');
-  const days = [];
-  daysCbs.forEach(cb => { if(cb.checked) days.push(parseInt(cb.value)); });
-  const timeRegex = /^\d{1,2}:\d{2}$/;
-  if(!onVal || !offVal || !timeRegex.test(onVal) || !timeRegex.test(offVal)) { alert('Please provide times in HH:MM'); return; }
-  if(days.length === 0) { alert('Select at least one day'); return; }
-  fetch('/api/schedule', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({pin: pin, on: onVal, off: offVal, days: days})}).then(resp => {
-    if(!resp.ok) resp.text().then(t => alert(t));
-    document.getElementById('addOn').value = '';
-    document.getElementById('addOff').value = '';
-    daysCbs.forEach(cb => { cb.checked = false; });
-    refresh();
-  });
-}
-function saveName(pin) {
-  const newName = document.getElementById('name-' + pin).value.trim();
-  if(!newName) { alert('Name cannot be empty'); return; }
-  fetch('/api/pin/' + pin + '/name', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name:newName})}).then(refresh).catch(()=>{});
-}
-function renderRain(data) {
-  const info = document.getElementById('rainInfo');
-  const controls = document.getElementById('rainControls');
-  if(!data || typeof data.enabled === 'undefined') {
-    info.textContent = 'Rain delay: not supported';
-    controls.style.display='none';
-    return;
-  }
-  const enabled = data.enabled;
-  const prob = data.probability;
-  const active = data.active;
-  document.getElementById('rainThreshold').value = data.threshold;
-  info.textContent = `Rain delay ${enabled? 'ENABLED':'DISABLED'} | Threshold: ${data.threshold}% | Chance: ${prob !== null ? prob.toFixed(0)+'%' : 'N/A'} | Active: ${active ? 'YES' : 'NO'}`;
-}
-async function enableRain() { await fetch('/api/rain', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({enabled:true})}); refresh(); }
-async function disableRain() { await fetch('/api/rain', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({enabled:false})}); refresh(); }
-async function setRain() { const val = parseFloat(document.getElementById('rainThreshold').value); if(!isFinite(val) || val<0 || val>100){ alert('Enter valid threshold 0-100'); return; } await fetch('/api/rain', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({threshold:val})}); refresh(); }
-function setSystem(on) {
-  fetch('/api/system', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({enabled: !!on})}).then(resp => {
-    if(!resp.ok) resp.text().then(t => alert(t));
-    refresh();
-  });
-}
-(function initDays(){
-  const cont = document.getElementById('addDaysContainer');
-  if(cont && cont.children.length === 0) {
-    for(let d=0; d<7; d++) {
-      const lbl = document.createElement('label');
-      lbl.style.display='flex';
-      lbl.style.alignItems='center';
-      lbl.style.marginRight='4px';
-      const cb = document.createElement('input');
-      cb.type='checkbox';
-      cb.value = d;
-      lbl.appendChild(cb);
-      lbl.appendChild(document.createTextNode(DAY_NAMES[d]));
-      cont.appendChild(lbl);
-    }
-  }
-})();
-refresh();
-setInterval(() => { if(editingCount === 0) refresh(); }, 5000);
-</script>
-</html>"""
 
     # ------------------------------------------------------------------
-    # Override the legacy HTML with a modernised interface implementing
-    # drag‑and‑drop reordering, batch save, global system toggle, presets,
-    # filtering and sorting, and run log navigation.  This new HTML
-    # completely replaces the earlier embedded template but is defined
-    # here after the original string so that index() will return this
-    # updated content.  Any references to the old HTML remain unused.
+    # Redesigned UI
+    #
+    # The original inline HTML above provided a basic list of pins and
+    # schedules.  In response to the user's request, we override the
+    # HTML variable with a much improved web interface.  This new UI
+    # groups active sprinkler zones and spare pins into separate
+    # sections, adds color‑coded toggle switches and manual run
+    # shortcuts with a countdown timer, reorganises the schedule editor
+    # into a grid, includes quick preset buttons for common seasonal
+    # schedules, displays rain delay status prominently, warns when
+    # multiple zones are active concurrently, and uses a modern dark
+    # theme with responsive layout for mobile devices.  All existing
+    # API endpoints are reused: pin control, renaming, schedule
+    # management and rain delay queries.
+    
     HTML = """<!doctype html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <title>Sprinkler Controller</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <style>
-    body { font-family: system-ui,sans-serif; background:#0b0f14; color:#e6edf3; margin:0; padding:0; }
-    .nav { padding:10px 20px; background:#10161d; display:flex; gap:20px; align-items:center; }
-    .nav a { color:#58a6ff; text-decoration:none; font-weight:bold; }
-    .nav .spacer { flex:1; }
-    h1 { margin:20px; font-size:1.6rem; }
-    .badge { padding:4px 8px; border-radius:6px; font-size:0.8rem; margin-right:8px; }
-    .badge.on { background:#2ecc71; color:#0b0f14; }
-    .badge.off { background:#e74c3c; color:white; }
-    .badge.disabled { background:#7f8c8d; color:#0b0f14; }
-    .badge.active { background:#f1c40f; color:#0b0f14; }
-    .card { background:#10161d; margin:20px; padding:16px; border-radius:12px; box-shadow:0 0 0 1px #1e2936; }
-    details summary { cursor:pointer; font-size:1.2rem; font-weight:bold; outline:none; }
-    button { padding:8px 14px; border:0; border-radius:8px; cursor:pointer; font-size:0.9rem; }
-    button.on { background:#2ecc71; color:#0b0f14; }
-    button.off { background:#e74c3c; color:white; }
-    button.muted { background:#233040; color:#9fb1c1; }
-    button.gray { background:#555; color:#ddd; }
-    input, select { background:#0b0f14; color:#e6edf3; border:1px solid #1e2936; border-radius:6px; padding:6px; font-size:0.9rem; }
-    table { width:100%; border-collapse:collapse; margin-top:10px; }
-    th, td { padding:6px; border-bottom:1px solid #1e2936; font-size:0.85rem; text-align:left; }
-    tr.dragging { opacity:0.5; }
-    .pin-row { border:1px solid #1e2936; border-radius:8px; padding:10px; margin-bottom:12px; background:#0f141b; }
-    .pin-row.dragging { opacity:0.6; }
-    .pin-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; }
-    .schedule-controls { display:flex; align-items:center; gap:8px; margin-bottom:10px; flex-wrap:wrap; }
-    .preset-buttons { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
-    @media (max-width:600px) {
-      .pin-header, .schedule-controls, .preset-buttons { flex-direction:column; align-items:flex-start; }
-      button { width:100%; margin-top:6px; }
-    }
-  </style>
+<meta charset="utf-8">
+<title>Sprinkler Controller</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+:root{
+  --bg:#0b0f14; --card:#10161d; --border:#1e2936; --text:#e6edf3; --muted:#9fb1c1; --green:#2ecc71; --red:#e74c3c; --accent:#3399ff;
+}
+*{box-sizing:border-box}
+body{font-family:system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:var(--bg); color:var(--text); margin:0}
+header{position:sticky; top:0; background:#081018; padding:10px 16px; display:flex; flex-wrap:wrap; gap:12px 16px; align-items:center; justify-content:space-between; border-bottom:1px solid var(--border); z-index:10}
+header .status{font-size:.9rem}
+.badge{padding:4px 8px; border-radius:8px; font-size:.8rem; display:inline-block}
+.badge.rain-active{background:var(--red); color:#fff}
+.badge.rain-inactive{background:var(--green); color:#000}
+
+main{padding:16px; display:flex; flex-direction:column; gap:16px}
+
+/* Cards & collapsibles */
+.card{background:var(--card); border:1px solid var(--border); border-radius:12px; overflow:hidden}
+.collap-head{display:flex; align-items:center; gap:10px; padding:12px 14px; cursor:pointer; user-select:none; background:#0d141b}
+.collap-head h2{margin:0; font-size:1.05rem}
+.collap-head .sub{margin-left:auto; font-size:.85rem; color:var(--muted)}
+.chev{margin-left:6px; transition:transform .2s ease}
+.collap.open .chev{transform:rotate(90deg)}
+.collap-body{max-height:0; overflow:hidden; transition:max-height .25s ease}
+.collap.open .collap-body{max-height:2000px} /* roomy enough for content */
+.section-pad{padding:12px}
+
+.warning{color:var(--red); font-size:.9rem; display:none; margin:8px 0}
+
+/* Single-column lists with compact, horizontal controls */
+.list{display:flex; flex-direction:column; gap:8px}
+.pin-row{
+  display:flex; align-items:center; gap:10px;
+  background:var(--bg); border:1px solid var(--border); border-radius:10px;
+  padding:8px 10px;
+}
+.pin-row .dot{width:8px; height:8px; border-radius:50%; background:#666}
+.pin-row .dot.on{background:var(--green)}
+.pin-row .gpio{font:600 12px ui-monospace, Menlo, monospace; color:#93a4b5}
+.pin-row input.pin-name{
+  min-width:140px; flex:1; background:transparent; border:none; color:var(--green); font-weight:600
+}
+.pin-row input.pin-name:focus{outline:1px solid var(--green); border-radius:6px; padding:2px 4px}
+.pin-row .mins{width:64px; background:transparent; border:1px solid var(--border); border-radius:6px; padding:4px 6px; color:var(--text); font-size:.9rem; text-align:center}
+button.btn{padding:6px 10px; font-size:.85rem; border:0; border-radius:8px; cursor:pointer; background:var(--border); color:var(--text)}
+button.primary{background:var(--green); color:#000}
+button.ghost{background:transparent; border:1px solid var(--border)}
+.countdown{font-size:.8rem; color:var(--muted); margin-left:auto}
+
+/* switch */
+.switch{position:relative; width:42px; height:24px; flex:0 0 auto}
+.switch input{opacity:0; width:0; height:0}
+.slider{position:absolute; inset:0; background:#555; border-radius:34px; transition:.2s}
+.slider:before{content:""; position:absolute; height:18px; width:18px; left:3px; bottom:3px; background:#fff; border-radius:50%; transition:.2s}
+.switch input:checked + .slider{background:var(--green)}
+.switch input:checked + .slider:before{transform:translateX(18px)}
+
+/* Schedules */
+table.sched-grid{width:100%; border-collapse:collapse}
+.sched-grid th,.sched-grid td{border-bottom:1px solid var(--border); padding:6px; font-size:.8rem; text-align:left; vertical-align:top}
+.sched-grid th{background:#0d141b}
+.sched-grid tr.disabled{opacity:.55}
+.sched-grid .next-run{color:var(--green); font-weight:600}
+
+/* Rain */
+.row{display:flex; flex-wrap:wrap; gap:10px; align-items:center}
+label.inline{display:flex; align-items:center; gap:8px; font-size:.9rem}
+input[type="number"], input[type="text"], select{background:transparent; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:6px 8px; font-size:.9rem}
+input[type="number"]{width:90px}
+
+@media (max-width:600px){
+  .sched-grid th,.sched-grid td{font-size:.72rem}
+}
+</style>
 </head>
 <body>
-  <div class="nav">
-    <span style="font-size:1.2rem;font-weight:bold;color:#e6edf3;">Sprinkler Controller</span>
-    <div class="spacer"></div>
-    <a href="/">Home</a>
-    <a href="/run-log">Run Log</a>
-  </div>
-  <div style="padding:0 20px;">
-    <div id="statusBadges" style="margin-top:10px;"></div>
-  </div>
-  <details open>
-    <summary>Pins</summary>
-    <div id="pinsContainer" style="padding:0 20px;"></div>
-  </details>
-  <details open>
-    <summary>Schedules</summary>
-    <div style="padding:0 20px;">
-      <div class="schedule-controls">
-        <label>Filter <input id="schedFilter" placeholder="Start time filter e.g. 22:" style="width:130px;"></label>
-        <button class="muted" onclick="clearFilter()">Clear</button>
-      </div>
-      <div style="margin-bottom:10px;">
-        <strong>Add Schedule:</strong><br/>
-        <label>Pin <select id="addPin"></select></label>
-        <label>On <input id="addOn" type="text" placeholder="HH:MM" style="width:80px;"></label>
-        <label>Off <input id="addOff" type="text" placeholder="HH:MM" style="width:80px;"></label>
-        <label>Days</label>
-        <div id="addDaysContainer" style="display:flex;gap:4px;margin-top:4px;flex-wrap:wrap;"></div>
-        <button class="muted" onclick="addSchedule()">Add</button>
-      </div>
-      <table id="schedTable"></table>
-      <div style="margin-top:8px;">
-        <button class="muted" onclick="saveAll()">Save All</button>
-      </div>
-      <div class="preset-buttons">
-        <button class="muted" onclick="applyStandard()">Standard schedule</button>
-        <button class="off" onclick="deleteAllSchedules()">Delete All</button>
-        <button class="muted" onclick="disableAllSchedules()">Disable All</button>
+<header>
+  <div class="status" id="timeBar"></div>
+  <div class="status" id="automationBar"></div>
+  <span class="badge" id="rainBadge">Rain Delay</span>
+</header>
+
+<main>
+
+  <!-- Active Pins (collapsible) -->
+  <section class="card collap open" id="activeCard">
+    <div class="collap-head" data-target="activeBody">
+      <h2>Active Pins</h2>
+      <div class="sub" id="activeSummary"></div>
+      <div class="chev">▶</div>
+    </div>
+    <div class="collap-body" id="activeBody">
+      <div class="section-pad">
+        <div id="activeWarn" class="warning"></div>
+        <div id="activeList" class="list"></div>
       </div>
     </div>
-  </details>
-  <details open>
-    <summary>Rain Delay</summary>
-    <div id="rainSection" style="padding:0 20px;">
-      <div id="rainInfo">Loading...</div>
-      <div style="margin-top:10px;" id="rainControls">
-        <label>Threshold (%) <input id="rainThreshold" style="width:60px" /></label>
-        <button class="muted" onclick="setRain()">Set Threshold</button>
-        <button class="on" onclick="enableRain()">Enable</button>
-        <button class="off" onclick="disableRain()">Disable</button>
+  </section>
+
+  <!-- Spare Pins (collapsible) -->
+  <section class="card collap open" id="spareCard">
+    <div class="collap-head" data-target="spareBody">
+      <h2>Spare Pins</h2>
+      <div class="sub" id="spareSummary"></div>
+      <div class="chev">▶</div>
+    </div>
+    <div class="collap-body" id="spareBody">
+      <div class="section-pad">
+        <div id="spareList" class="list"></div>
       </div>
     </div>
-  </details>
-</body>
+  </section>
+
+  <!-- Schedules (collapsible) -->
+  <section class="card collap open" id="schedulesCard">
+    <div class="collap-head" data-target="schedulesBody">
+      <h2>Schedules</h2>
+      <div class="sub" id="schedSummary"></div>
+      <div class="chev">▶</div>
+    </div>
+    <div class="collap-body" id="schedulesBody">
+      <div class="section-pad">
+        <table class="sched-grid">
+          <thead>
+            <tr><th>Zone</th><th>On</th><th>Off</th><th>Days</th><th>Enabled</th><th>Next</th><th>Action</th></tr>
+          </thead>
+          <tbody id="schedBody"></tbody>
+        </table>
+        <div class="add-sched" style="margin-top:12px;">
+          <h3 style="margin:12px 0 8px; font-size:.95rem; color:var(--muted)">Add Schedule</h3>
+          <label>Pin <select id="newSchedPin"></select></label>
+          <label>On <input id="newSchedOn" type="text" placeholder="HH:MM" size="5"></label>
+          <label>Off <input id="newSchedOff" type="text" placeholder="HH:MM" size="5"></label>
+          <div id="newSchedDays" class="row" style="margin-top:6px;">
+            <label><input type="checkbox" value="0">Mon</label>
+            <label><input type="checkbox" value="1">Tue</label>
+            <label><input type="checkbox" value="2">Wed</label>
+            <label><input type="checkbox" value="3">Thu</label>
+            <label><input type="checkbox" value="4">Fri</label>
+            <label><input type="checkbox" value="5">Sat</label>
+            <label><input type="checkbox" value="6">Sun</label>
+          </div>
+          <div style="margin-top:8px; display:flex; gap:8px">
+            <button id="addScheduleBtn" class="btn primary">Add</button>
+            <button id="presetHighfreq" class="btn">High-Freq</button>
+            <button id="presetOffSeason" class="btn">Off Season</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Rain Delay (collapsible) -->
+  <section class="card collap" id="rainCard">
+    <div class="collap-head" data-target="rainBody">
+      <h2>Rain Delay</h2>
+      <div class="sub" id="rainSummary">Tap to expand</div>
+      <div class="chev">▶</div>
+    </div>
+    <div class="collap-body" id="rainBody">
+      <div class="section-pad">
+        <div class="row" style="margin-bottom:8px">
+          <label class="inline"><input type="checkbox" id="rainEnabled"> Enable rain delay</label>
+          <label class="inline">Threshold (%) <input type="number" min="0" max="100" id="rainThreshold"></label>
+          <button class="btn primary" id="rainSave">Save</button>
+          <button class="btn ghost" id="rainRefresh">Refresh</button>
+        </div>
+        <div id="rainStatus" style="color:var(--muted)"></div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
 <script>
-// Modern Sprinkler UI JavaScript
+/* ========= Collapsible behavior ========= */
+document.addEventListener('click', (e)=>{
+  const head = e.target.closest('.collap-head'); if(!head) return;
+  head.parentElement.classList.toggle('open');
+});
+
+/* ========= Helpers ========= */
 const DAY_NAMES = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
-let editingCount = 0;
-function incEditing(){ editingCount++; }
-function decEditing(){ if(editingCount>0) editingCount--; }
-let schedSortKey = null;
-let schedSortAsc = true;
-let schedFilterStr = '';
-async function fetchJson(url, opts={}) {
-  const resp = await fetch(url, opts);
-  if(!resp.ok) {
-    const txt = await resp.text();
-    throw new Error(txt || 'Request failed');
-  }
-  return await resp.json();
-}
-async function refresh() {
-  try {
-    const status = await fetchJson('/api/status');
-    const rainData = await fetchJson('/api/rain');
-    renderStatus(status, rainData);
-    renderPins(status.pins, status.system_enabled, status.automation_enabled);
-    renderSchedules(status.schedules);
-    renderRain(rainData);
-  } catch(e) {
-    console.error(e);
-  }
-}
-function renderStatus(status, rain) {
-  const cont = document.getElementById('statusBadges');
-  cont.innerHTML = '';
-  const sys = document.createElement('span');
-  sys.className = 'badge ' + (status.system_enabled ? 'on' : 'off');
-  sys.textContent = 'System: ' + (status.system_enabled ? 'ON' : 'OFF');
-  cont.appendChild(sys);
-  const auto = document.createElement('span');
-  auto.className = 'badge ' + (status.automation_enabled ? 'on' : 'off');
-  auto.textContent = 'Automation: ' + (status.automation_enabled ? 'ENABLED' : 'DISABLED');
-  cont.appendChild(auto);
-  if (rain && typeof rain.enabled !== 'undefined') {
-    const rb = document.createElement('span');
-    if(!rain.enabled) {
-      rb.className = 'badge disabled';
-      rb.textContent = 'Rain Delay: OFF';
-    } else if (rain.active) {
-      rb.className = 'badge active';
-      rb.textContent = 'Rain Delay: ACTIVE';
-    } else {
-      rb.className = 'badge on';
-      rb.textContent = 'Rain Delay: ON';
-    }
-    cont.appendChild(rb);
-  }
-}
-function renderPins(pins, systemEnabled, autoEnabled) {
-  const container = document.getElementById('pinsContainer');
-  container.innerHTML = '';
-  const addPinSel = document.getElementById('addPin');
-  addPinSel.innerHTML = '';
-  pins.forEach((p, idx) => {
-    const opt = document.createElement('option');
-    opt.value = p.pin;
-    opt.textContent = p.pin + ' (' + p.name + ')';
-    addPinSel.appendChild(opt);
-    const row = document.createElement('div');
-    row.className = 'pin-row';
-    row.setAttribute('draggable','true');
-    row.dataset.pin = p.pin;
-    const header = document.createElement('div');
-    header.className = 'pin-header';
-    const title = document.createElement('div');
-    title.innerHTML = '<strong>GPIO ' + p.pin + '</strong>';
-    header.appendChild(title);
-    if(idx === 0) {
-      const sysToggle = document.createElement('div');
-      sysToggle.style.marginLeft = 'auto';
-      const btn = document.createElement('button');
-      if(systemEnabled) {
-        btn.className = 'off';
-        btn.textContent = 'Turn System OFF';
-        btn.onclick = () => setSystem(false);
-      } else {
-        btn.className = 'on';
-        btn.textContent = 'Turn System ON';
-        btn.onclick = () => setSystem(true);
-      }
-      sysToggle.appendChild(btn);
-      header.appendChild(sysToggle);
-    }
-    row.appendChild(header);
-    const nameRow = document.createElement('div');
-    nameRow.style.marginBottom = '6px';
-    const nameLabel = document.createElement('span');
-    nameLabel.textContent = 'Name: ';
-    nameRow.appendChild(nameLabel);
-    const nameInput = document.createElement('input');
-    nameInput.value = p.name;
-    nameInput.style.width = '160px';
-    nameInput.id = 'name-' + p.pin;
-    nameInput.onfocus = incEditing;
-    nameInput.onblur = decEditing;
-    nameRow.appendChild(nameInput);
-    const saveBtn = document.createElement('button');
-    saveBtn.className = 'muted';
-    saveBtn.style.marginLeft = '4px';
-    saveBtn.textContent = 'Save';
-    saveBtn.onclick = () => { saveName(p.pin); };
-    nameRow.appendChild(saveBtn);
-    row.appendChild(nameRow);
-    const stateRow = document.createElement('div');
-    stateRow.style.display = 'flex';
-    stateRow.style.alignItems = 'center';
-    stateRow.style.flexWrap = 'wrap';
-    const stateTxt = document.createElement('span');
-    stateTxt.textContent = 'State: ' + (p.is_active ? 'ON' : 'OFF');
-    stateTxt.style.marginRight = '10px';
-    stateRow.appendChild(stateTxt);
-    const btnOn = document.createElement('button');
-    btnOn.className = 'on';
-    btnOn.textContent = 'On';
-    btnOn.disabled = !systemEnabled;
-    btnOn.onclick = () => { fetch('/api/pin/' + p.pin + '/on', {method:'POST'}).then(refresh).catch(()=>{}); };
-    stateRow.appendChild(btnOn);
-    const btnOff = document.createElement('button');
-    btnOff.className = 'off';
-    btnOff.textContent = 'Off';
-    btnOff.style.marginLeft = '4px';
-    btnOff.onclick = () => { fetch('/api/pin/' + p.pin + '/off', {method:'POST'}).then(refresh).catch(()=>{}); };
-    stateRow.appendChild(btnOff);
-    const manLabel = document.createElement('span');
-    manLabel.style.marginLeft = '12px';
-    manLabel.textContent = 'Minutes:';
-    stateRow.appendChild(manLabel);
-    const manInput = document.createElement('input');
-    manInput.type = 'number';
-    manInput.min = '1';
-    manInput.max = '180';
-    manInput.step = '1';
-    manInput.style.width = '60px';
-    manInput.value = '10';
-    manInput.id = 'manual-' + p.pin;
-    manInput.onfocus = incEditing;
-    manInput.onblur = decEditing;
-    stateRow.appendChild(manInput);
-    const manBtn = document.createElement('button');
-    manBtn.className = 'muted';
-    manBtn.style.marginLeft = '4px';
-    manBtn.textContent = 'Start';
-    manBtn.disabled = !systemEnabled;
-    manBtn.onclick = () => {
-      const mins = parseFloat(document.getElementById('manual-' + p.pin).value);
-      if(!isFinite(mins) || mins <= 0) { alert('Enter minutes > 0'); return; }
-      const secs = Math.round(mins * 60);
-      fetch('/api/pin/' + p.pin + '/on?seconds=' + secs, {method:'POST'}).then(refresh).catch(()=>{});
-    };
-    stateRow.appendChild(manBtn);
-    row.appendChild(stateRow);
-    container.appendChild(row);
+const slotRe = /^Slot\s+(\d+)\b/i;
+function bySlotThenGpio(pins){
+  const slots=[], spares=[];
+  pins.forEach(p=>{
+    const m = p.name ? p.name.match(slotRe) : null;
+    if(m){ const n = parseInt(m[1],10); slots.push({...p, _slot: Number.isFinite(n)?n:999}); }
+    else { spares.push(p); }
   });
-  enableDragOrdering(container, '.pin-row', (order) => {
-    fetch('/api/reorder', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({pin_order: order})});
-  });
+  slots.sort((a,b)=>a._slot - b._slot);
+  spares.sort((a,b)=>a.pin - b.pin);
+  return {slots, spares};
 }
-function renderSchedules(schedules) {
-  const table = document.getElementById('schedTable');
-  table.innerHTML = '';
-  const headerRow = document.createElement('tr');
-  const cols = [
-    {key:'pin', label:'Pin (Name)'},
-    {key:'on', label:'On'},
-    {key:'off', label:'Off'},
-    {key:'next_run', label:'Next'},
-    {key:'days', label:'Days'},
-    {key:'enabled', label:'Enabled'},
-    {key:'actions', label:'Actions'}
-  ];
-  cols.forEach(col => {
-    const th = document.createElement('th');
-    th.textContent = col.label;
-    if(['pin','on','off','next_run'].includes(col.key)) {
-      th.style.cursor = 'pointer';
-      th.onclick = () => {
-        if(schedSortKey === col.key) {
-          schedSortAsc = !schedSortAsc;
-        } else {
-          schedSortKey = col.key;
-          schedSortAsc = true;
-        }
-        renderSchedules(schedules);
-      };
-    }
-    headerRow.appendChild(th);
+function fmtTime(s){
+  var m = Math.floor(s/60), r = s % 60;
+  return String(m) + ":" + String(r).padStart(2,'0');
+}
+// New helpers for parsing and formatting HH:MM times
+function parseHHMM(s){
+  const m = /^\s*(\d{1,2}):(\d{2})\s*$/.exec(s || "");
+  if(!m) return null;
+  const h = parseInt(m[1],10), mi = parseInt(m[2],10);
+  if(h < 0 || h > 23 || mi < 0 || mi > 59) return null;
+  return h*60 + mi;  // total minutes from midnight
+}
+
+function toHHMM(total){
+  const h = Math.floor(total / 60) % 24;
+  const m = total % 60;
+  return String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0');
+}
+/* ========= Data flow ========= */
+function fetchStatus(){
+  fetch('/api/status').then(r=>r.json()).then(data=>{
+    updateHeader(data);
+    renderPinsGrouped(data.pins_slots, data.pins_spares, data.automation_enabled);
+    updateSchedules(data.schedules);
+    hydratePinSelect(data.pins);
   });
-  table.appendChild(headerRow);
-  let filtered = schedules;
-  if(schedFilterStr && schedFilterStr.trim() !== '') {
-    const f = schedFilterStr.trim().toLowerCase();
-    filtered = schedules.filter(s => s.on.toLowerCase().startsWith(f));
-  }
-  if(schedSortKey) {
-    filtered = filtered.slice().sort((a,b) => {
-      let av = a[schedSortKey];
-      let bv = b[schedSortKey];
-      if(schedSortKey === 'pin') { av = a.pin; bv = b.pin; }
-      if(av < bv) return schedSortAsc ? -1 : 1;
-      if(av > bv) return schedSortAsc ? 1 : -1;
-      return 0;
-    });
-  }
-  filtered.forEach(s => {
-    const tr = document.createElement('tr');
-    tr.setAttribute('draggable','true');
-    tr.dataset.id = s.id;
-    const tdPin = document.createElement('td');
-    tdPin.textContent = s.pin + ' (' + s.pin_name + ')';
-    tr.appendChild(tdPin);
-    const tdOn = document.createElement('td');
-    const inpOn = document.createElement('input');
+  fetch('/api/rain').then(r=>r.json()).then(updateRain).catch(()=>{});
+}
+
+/* ========= Header ========= */
+function updateHeader(data){
+  var server = new Date(data.server_time_iso);
+  var drift = Math.round((Date.now() - server.getTime())/1000);
+  document.getElementById('timeBar').textContent =
+    'Pi Time: ' + server.toLocaleString() + ' (drift ' + (drift>=0?'+':'') + drift + 's)';
+  document.getElementById('automationBar').textContent =
+    data.automation_enabled ? 'Automation: ENABLED' : 'Automation: DISABLED';
+}
+/* ========= Pins ========= */
+function renderPinsGrouped(slots, spares, automationEnabled){
+  const activeList = document.getElementById('activeList');
+  const spareList  = document.getElementById('spareList');
+  activeList.innerHTML=''; spareList.innerHTML='';
+
+  slots.forEach(p => activeList.appendChild(makePinRow(p, automationEnabled)));
+  spares.forEach(p => spareList.appendChild(makePinRow(p, automationEnabled)));
+
+  document.getElementById('activeSummary').textContent =
+  slots.length + ' slot' + (slots.length!==1 ? 's' : '');
+document.getElementById('spareSummary').textContent  =
+  spares.length + ' spare' + (spares.length!==1 ? 's' : '');
+
+var running = slots.concat(spares).filter(function(p){ return p.is_active; }).length;
+var warn = document.getElementById('activeWarn');
+if(running>1){
+  warn.style.display='block';
+  warn.textContent='Warning: ' + running + ' zones are active simultaneously';
+}else{
+  warn.style.display='none';
+}
+function makePinRow(p, automationEnabled){
+  const row = document.createElement('div'); row.className='pin-row';
+
+  const dot = document.createElement('span'); dot.className='dot'+(p.is_active?' on':''); row.appendChild(dot);
+  var gpio = document.createElement('span'); gpio.className='gpio'; gpio.textContent='GPIO ' + p.pin; row.appendChild(gpio);
+
+var name = document.createElement('input'); name.className='pin-name'; name.value = p.name || ('GPIO ' + p.pin);
+name.addEventListener('change', function(){
+  var newName = name.value.trim();
+  fetch('/api/pin/' + p.pin + '/name', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name:newName})});
+});
+  row.appendChild(name);
+
+  const sw = document.createElement('label'); sw.className='switch';
+  const sb = document.createElement('input'); sb.type='checkbox'; sb.checked=!!p.is_active; sb.disabled=!automationEnabled;
+  sb.addEventListener('change', function(){
+  fetch('/api/pin/' + p.pin + '/' + (sb.checked ? 'on' : 'off'), {method:'POST'});
+});
+  const slider = document.createElement('span'); slider.className='slider';
+  sw.appendChild(sb); sw.appendChild(slider); row.appendChild(sw);
+
+  const mins = document.createElement('input'); mins.type='text'; mins.value='10'; mins.className='mins'; mins.title='Minutes';
+  row.appendChild(mins);
+
+  const run = document.createElement('button'); run.className='btn primary'; run.textContent='RUN';
+  run.addEventListener('click', ()=>{
+    const m = parseInt(mins.value,10); if(!Number.isFinite(m)||m<=0) return alert('Enter minutes > 0');
+    var secs = m*60;
+fetch('/api/pin/' + p.pin + '/on?seconds=' + secs, {method:'POST'}).then(function(){ startCountdown(p.pin, secs); });
+  });
+  row.appendChild(run);
+
+  const stop = document.createElement('button'); stop.className='btn'; stop.textContent='STOP';
+  stop.addEventListener('click', ()=> fetch(`/api/pin/${p.pin}/off`, {method:'POST'}));
+  row.appendChild(stop);
+
+  var cd = document.createElement('span'); cd.id='countdown-' + p.pin; cd.className='countdown'; row.appendChild(cd);
+
+  return row;
+}
+function startCountdown(pin, seconds){
+  var remaining = seconds;
+  var el = document.getElementById('countdown-' + pin);
+  if(!el) return;
+  el.textContent = fmtTime(remaining);
+  var id = setInterval(function(){
+    remaining--;
+    if(remaining<=0){
+      clearInterval(id);
+      el.textContent = '';
+    }else{
+      el.textContent = fmtTime(remaining);
+    }
+  }, 1000);
+}
+/* ========= Schedules ========= */
+function updateSchedules(schedules){
+  var tbody = document.getElementById('schedBody');
+  tbody.innerHTML = '';
+
+  for (var i = 0; i < schedules.length; i++){
+    var s = schedules[i];
+
+    var tr = document.createElement('tr');
+    if(!s.enabled){ tr.classList.add('disabled'); }
+
+    // Zone
+    var tdZone = document.createElement('td');
+    tdZone.textContent = s.pin_name;
+    tr.appendChild(tdZone);
+
+    // On
+    var tdOn = document.createElement('td');
+    var inpOn = document.createElement('input');
+    inpOn.type = 'text';
     inpOn.value = s.on;
-    inpOn.style.width = '70px';
-    inpOn.id = 'on-' + s.id;
-    inpOn.onfocus = incEditing;
-    inpOn.onblur = decEditing;
+    inpOn.size = 5;
+    inpOn.addEventListener('change', function(idRef, el){
+      return function(){ updateSchedule(idRef, {on: el.value}); };
+    }(s.id, inpOn));
     tdOn.appendChild(inpOn);
     tr.appendChild(tdOn);
-    const tdOff = document.createElement('td');
-    const inpOff = document.createElement('input');
+
+    // Off
+    var tdOff = document.createElement('td');
+    var inpOff = document.createElement('input');
+    inpOff.type = 'text';
     inpOff.value = s.off;
-    inpOff.style.width = '70px';
-    inpOff.id = 'off-' + s.id;
-    inpOff.onfocus = incEditing;
-    inpOff.onblur = decEditing;
+    inpOff.size = 5;
+    inpOff.addEventListener('change', function(idRef, el){
+      return function(){ updateSchedule(idRef, {off: el.value}); };
+    }(s.id, inpOff));
     tdOff.appendChild(inpOff);
     tr.appendChild(tdOff);
-    const tdNext = document.createElement('td');
-    tdNext.textContent = s.next_run || '';
-    tr.appendChild(tdNext);
-    const tdDays = document.createElement('td');
-    const daysDiv = document.createElement('div');
-    daysDiv.style.display = 'flex';
-    daysDiv.style.flexWrap = 'wrap';
-    daysDiv.style.gap = '4px';
-    for(let d=0; d<7; d++) {
-      const lbl = document.createElement('label');
-      lbl.style.display='flex'; lbl.style.alignItems='center'; lbl.style.marginRight='4px';
-      const cb = document.createElement('input');
-      cb.type='checkbox';
-      cb.value=d;
-      cb.id = 'days-' + s.id + '-' + d;
-      if(Array.isArray(s.days) && s.days.includes(d)) cb.checked=true;
-      cb.onfocus = incEditing;
-      cb.onblur = decEditing;
-      lbl.appendChild(cb);
-      lbl.appendChild(document.createTextNode(DAY_NAMES[d]));
-      daysDiv.appendChild(lbl);
+
+    // Days
+    var tdDays = document.createElement('td');
+    for (var d = 0; d < DAY_NAMES.length; d++){
+      var lb = document.createElement('label');
+      lb.style.display = 'inline-flex';
+      lb.style.gap = '6px';
+      lb.style.marginRight = '8px';
+
+      var cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = s.days.indexOf(d) !== -1;
+      cb.addEventListener('change', (function(idRef, container){
+        return function(){
+          var boxes = container.querySelectorAll('input[type=checkbox]');
+          var arr = [];
+          for (var k = 0; k < boxes.length; k++){
+            if (boxes[k].checked){ arr.push(k); }
+          }
+          updateSchedule(idRef, {days: arr});
+        };
+      })(s.id, tdDays));
+
+      lb.appendChild(cb);
+      lb.append(DAY_NAMES[d]);
+      tdDays.appendChild(lb);
     }
-    tdDays.appendChild(daysDiv);
     tr.appendChild(tdDays);
-    const tdEn = document.createElement('td');
-    const chk = document.createElement('input');
-    chk.type='checkbox';
-    chk.id = 'enabled-' + s.id;
-    chk.checked = s.enabled;
-    chk.onfocus = incEditing;
-    chk.onblur = decEditing;
-    tdEn.appendChild(chk);
+
+    // Enabled
+    var tdEn = document.createElement('td');
+    var cbEn = document.createElement('input');
+    cbEn.type = 'checkbox';
+    cbEn.checked = s.enabled;
+    cbEn.addEventListener('change', (function(idRef, el){
+      return function(){ updateSchedule(idRef, {enabled: el.checked}); };
+    })(s.id, cbEn));
+    tdEn.appendChild(cbEn);
     tr.appendChild(tdEn);
-    const tdAct = document.createElement('td');
-    const saveBtn = document.createElement('button');
-    saveBtn.className = 'muted';
-    saveBtn.textContent = 'Save';
-    saveBtn.onclick = () => {
-      const newOn = document.getElementById('on-' + s.id).value;
-      const newOff = document.getElementById('off-' + s.id).value;
-      const enVal = document.getElementById('enabled-' + s.id).checked;
-      const daysArr = [];
-      for(let d=0; d<7; d++) {
-        const cb = document.getElementById('days-' + s.id + '-' + d);
-        if(cb && cb.checked) daysArr.push(d);
-      }
-      fetch('/api/schedule/' + s.id, {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({on:newOn, off:newOff, days:daysArr, enabled:enVal})
-      }).then(resp => {
-        if(!resp.ok) {
-          resp.text().then(t => alert(t));
+
+    // Next
+    var tdNext = document.createElement('td');
+    tdNext.textContent = s.next_run ? s.next_run : '';
+    if (s.next_run){ tdNext.classList.add('next-run'); }
+    tr.appendChild(tdNext);
+
+    // Action
+    var tdAct = document.createElement('td');
+
+    // Delete
+    var del = document.createElement('button');
+    del.className = 'btn';
+    del.textContent = 'Delete';
+    del.addEventListener('click', (function(idRef){
+      return function(){
+        if (confirm('Delete this schedule?')){
+          fetch('/api/schedule/' + idRef, {method:'DELETE'}).then(fetchStatus);
         }
-        refresh();
-      });
-    };
-    tdAct.appendChild(saveBtn);
-    const delBtn = document.createElement('button');
-    delBtn.className = 'off';
-    delBtn.style.marginLeft='4px';
-    delBtn.textContent = 'Delete';
-    delBtn.onclick = () => {
-      if(confirm('Delete this schedule?')) {
-        fetch('/api/schedule/' + s.id, {method:'DELETE'}).then(refresh).catch(()=>{});
-      }
-    };
-    tdAct.appendChild(delBtn);
+      };
+    })(s.id));
+    tdAct.appendChild(del);
+
+    // Duplicate
+    var dup = document.createElement('button');
+    dup.className = 'btn';
+    dup.textContent = 'Duplicate';
+    dup.style.marginLeft = '8px';
+    dup.title = 'Make a copy that starts at this schedule\'s OFF time with the same duration';
+    dup.addEventListener('click', (function(sRef){
+      return function(){
+        var onM  = parseHHMM(sRef.on);
+        var offM = parseHHMM(sRef.off);
+        if (onM == null || offM == null){
+          alert('Cannot duplicate: bad time format.');
+          return;
+        }
+        var dur = offM - onM;
+        if (dur <= 0){
+          alert('This schedule ends at/before it starts. Duplication would cross midnight. Please adjust this row first.');
+          return;
+        }
+        var newOn  = offM;
+        var newOff = offM + dur;
+        if (newOff >= 24*60){
+          alert('Duplication would cross midnight. Shorten the duration or move the original earlier.');
+          return;
+        }
+        var payload = {
+          pin: sRef.pin,
+          on:  toHHMM(newOn),
+          off: toHHMM(newOff),
+          days: sRef.days.slice()
+        };
+        fetch('/api/schedule', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload)
+        }).then(function(r){ return r.ok ? fetchStatus() : r.text().then(function(t){ alert('Error: ' + t); }); });
+      };
+    })(s));
+    tdAct.appendChild(dup);
+
     tr.appendChild(tdAct);
-    table.appendChild(tr);
-  });
-  enableDragOrdering(table, 'tr[data-id]', (order) => {
-    fetch('/api/reorder', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({schedule_order: order})});
-  });
-}
-function enableDragOrdering(container, selector, callback) {
-  let dragged;
-  container.querySelectorAll(selector).forEach(item => {
-    item.addEventListener('dragstart', function(e){ dragged=this; this.classList.add('dragging'); e.dataTransfer.effectAllowed='move'; });
-    item.addEventListener('dragend', function(){ this.classList.remove('dragging'); });
-    item.addEventListener('dragover', function(e){ if(e.preventDefault) e.preventDefault(); return false; });
-    item.addEventListener('drop', function(e){ e.stopPropagation(); if(dragged && dragged !== this){
-      const items = Array.from(container.querySelectorAll(selector));
-      const draggedIndex = items.indexOf(dragged);
-      const dropIndex = items.indexOf(this);
-      if(draggedIndex < dropIndex) {
-        container.insertBefore(dragged, this.nextSibling);
-      } else {
-        container.insertBefore(dragged, this);
-      }
-      const order = Array.from(container.querySelectorAll(selector)).map(el => el.dataset.pin || el.dataset.id);
-      if(callback) callback(order);
-    }
-    return false; });
-  });
-}
-function saveAll() {
-  const pinRows = document.querySelectorAll('.pin-row');
-  const pinsData = [];
-  pinRows.forEach(row => {
-    const pin = parseInt(row.dataset.pin);
-    const name = document.getElementById('name-' + pin).value.trim();
-    pinsData.push({pin: pin, name: name});
-  });
-  const scheduleRows = document.querySelectorAll('#schedTable tr[data-id]');
-  const schedulesData = [];
-  scheduleRows.forEach(tr => {
-    const id = tr.dataset.id;
-    const onVal = document.getElementById('on-' + id).value;
-    const offVal = document.getElementById('off-' + id).value;
-    const enVal = document.getElementById('enabled-' + id).checked;
-    const daysArr = [];
-    for(let d=0; d<7; d++) {
-      const cb = document.getElementById('days-' + id + '-' + d);
-      if(cb && cb.checked) daysArr.push(d);
-    }
-    schedulesData.push({id: id, on: onVal, off: offVal, days: daysArr, enabled: enVal});
-  });
-  const pinOrder = Array.from(document.querySelectorAll('.pin-row')).map(el => el.dataset.pin);
-  const scheduleOrder = Array.from(document.querySelectorAll('#schedTable tr[data-id]')).map(el => el.dataset.id);
-  fetch('/api/save_all', {
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({pins: pinsData, schedules: schedulesData, pin_order: pinOrder, schedule_order: scheduleOrder})
-  }).then(resp => {
-    if(!resp.ok) resp.text().then(t => alert(t));
-    refresh();
-  }).catch(err => alert(err));
-}
-function applyStandard() {
-  if(!confirm('Apply standard schedule? This will replace all existing schedules.')) return;
-  fetch('/api/preset/standard', {method:'POST'}).then(refresh).catch(()=>{});
-}
-function deleteAllSchedules() {
-  if(!confirm('Delete all schedules?')) return;
-  fetch('/api/schedules/delete_all', {method:'POST'}).then(refresh).catch(()=>{});
-}
-function disableAllSchedules() {
-  if(!confirm('Disable all schedules?')) return;
-  fetch('/api/schedules/disable_all', {method:'POST'}).then(refresh).catch(()=>{});
-}
-const filterInput = document.getElementById('schedFilter');
-if(filterInput) {
-  filterInput.addEventListener('input', () => {
-    schedFilterStr = filterInput.value;
-    refresh();
-  });
-}
-function clearFilter() {
-  schedFilterStr = '';
-  const fi = document.getElementById('schedFilter');
-  if(fi) fi.value = '';
-  refresh();
-}
-function addSchedule() {
-  const pin = parseInt(document.getElementById('addPin').value);
-  const onVal = document.getElementById('addOn').value;
-  const offVal = document.getElementById('addOff').value;
-  const daysCbs = document.querySelectorAll('#addDaysContainer input[type="checkbox"]');
-  const days = [];
-  daysCbs.forEach(cb => { if(cb.checked) days.push(parseInt(cb.value)); });
-  const timeRegex = /^\d{1,2}:\d{2}$/;
-  if(!onVal || !offVal || !timeRegex.test(onVal) || !timeRegex.test(offVal)) { alert('Please provide times in HH:MM'); return; }
-  if(days.length === 0) { alert('Select at least one day'); return; }
-  fetch('/api/schedule', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({pin: pin, on: onVal, off: offVal, days: days})}).then(resp => {
-    if(!resp.ok) resp.text().then(t => alert(t));
-    document.getElementById('addOn').value = '';
-    document.getElementById('addOff').value = '';
-    daysCbs.forEach(cb => { cb.checked = false; });
-    refresh();
-  });
-}
-function saveName(pin) {
-  const newName = document.getElementById('name-' + pin).value.trim();
-  if(!newName) { alert('Name cannot be empty'); return; }
-  fetch('/api/pin/' + pin + '/name', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name:newName})}).then(refresh).catch(()=>{});
-}
-function renderRain(data) {
-  const info = document.getElementById('rainInfo');
-  const controls = document.getElementById('rainControls');
-  if(!data || typeof data.enabled === 'undefined') {
-    info.textContent = 'Rain delay: not supported';
-    controls.style.display='none';
-    return;
+    tbody.appendChild(tr);
   }
-  const enabled = data.enabled;
-  const prob = data.probability;
-  const active = data.active;
-  document.getElementById('rainThreshold').value = data.threshold;
-  info.textContent = `Rain delay ${enabled? 'ENABLED':'DISABLED'} | Threshold: ${data.threshold}% | Chance: ${prob !== null ? prob.toFixed(0)+'%' : 'N/A'} | Active: ${active ? 'YES' : 'NO'}`;
+
+  var summary = schedules.length + ' schedule' + (schedules.length !== 1 ? 's' : '');
+  document.getElementById('schedSummary').textContent =
+  schedules.length + ' schedule' + (schedules.length!==1 ? 's' : '');
 }
-async function enableRain() { await fetch('/api/rain', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({enabled:true})}); refresh(); }
-async function disableRain() { await fetch('/api/rain', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({enabled:false})}); refresh(); }
-async function setRain() { const val = parseFloat(document.getElementById('rainThreshold').value); if(!isFinite(val) || val<0 || val>100){ alert('Enter valid threshold 0-100'); return; } await fetch('/api/rain', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({threshold:val})}); refresh(); }
-function setSystem(on) {
-  fetch('/api/system', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({enabled: !!on})}).then(resp => {
-    if(!resp.ok) resp.text().then(t => alert(t));
-    refresh();
+function hydratePinSelect(_){
+  fetch('/api/status').then(r=>r.json()).then(data=>{
+    const sel = document.getElementById('newSchedPin'); sel.innerHTML='';
+    [...data.pins_slots, ...data.pins_spares].forEach(p=>{
+      var o=document.createElement('option');
+o.value = p.pin;
+o.textContent = 'GPIO ' + p.pin + ' — ' + (p.name || ('GPIO ' + p.pin));
+sel.appendChild(o);
+    });
   });
 }
-(function initDays(){
-  const cont = document.getElementById('addDaysContainer');
-  if(cont && cont.children.length === 0) {
-    for(let d=0; d<7; d++) {
-      const lbl = document.createElement('label');
-      lbl.style.display='flex';
-      lbl.style.alignItems='center';
-      lbl.style.marginRight='4px';
-      const cb = document.createElement('input');
-      cb.type='checkbox';
-      cb.value = d;
-      lbl.appendChild(cb);
-      lbl.appendChild(document.createTextNode(DAY_NAMES[d]));
-      cont.appendChild(lbl);
-    }
+function updateSchedule(id, obj){
+  fetch(`/api/schedule/${id}`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(obj)}).then(fetchStatus);
+}
+
+/* ========= Rain ========= */
+function updateRain(rd){
+  var badge = document.getElementById('rainBadge');
+  if(!rd || !('enabled' in rd)){ badge.style.display='none'; return; }
+  badge.style.display='inline-block';
+
+  var prob = rd.probability!=null ? Math.round(rd.probability) : null;
+  var thr = rd.threshold;
+
+  badge.textContent = rd.active
+    ? 'Rain Delay: Active (' + (prob!=null ? (prob + '%') : '') + ' \u2265 ' + thr + '%)'
+    : 'Rain Delay: Inactive (' + (prob!=null ? (prob + '%') : '') + ' < ' + thr + '%)';
+
+  // hydrate panel controls and summary
+  var en = document.getElementById('rainEnabled');
+  var th = document.getElementById('rainThreshold');
+  if (en) { en.checked = !!rd.enabled; }
+  if (th) { th.value   = (thr!=null ? thr : 50); }
+  var sum = document.getElementById('rainSummary');
+  if (sum) {
+    sum.textContent = 'Enabled: ' + (en && en.checked ? 'Yes' : 'No') + ' • Threshold: ' + (th ? th.value : thr) + '%';
   }
-})();
-refresh();
-setInterval(() => { if(editingCount === 0) refresh(); }, 5000);
+}
+document.addEventListener('DOMContentLoaded', ()=>{
+  // Add Schedule
+  document.getElementById('addScheduleBtn').addEventListener('click', ()=>{
+    const pin = parseInt(document.getElementById('newSchedPin').value,10);
+    const onVal = document.getElementById('newSchedOn').value.trim();
+    const offVal= document.getElementById('newSchedOff').value.trim();
+    const days = [...document.querySelectorAll('#newSchedDays input[type=checkbox]')].filter(cb=>cb.checked).map(cb=>parseInt(cb.value,10));
+    if(!/^\d{1,2}:\d{2}$/.test(onVal) || !/^\d{1,2}:\d{2}$/.test(offVal)) return alert('Times must be HH:MM');
+    if(days.length===0) return alert('Select at least one day');
+    fetch('/api/schedule', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({pin:pin,on:onVal,off:offVal,days:days})})
+      .then(r=>r.ok?fetchStatus():r.text().then(t=>alert(t)));
+  });
+
+  // Presets (keep your existing behavior here if you like)
+  var hfBtn = document.getElementById('presetHighfreq');
+if (hfBtn){
+  hfBtn.addEventListener('click', function(){
+    alert('High-Freq preset stub — implement to your preference.');
+  });
+}
+  document.getElementById('presetOffSeason')?.addEventListener('click', ()=>{
+    fetch('/api/status').then(r=>r.json()).then(data=>{
+      Promise.all(data.schedules.map(s=> fetch(`/api/schedule/${s.id}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:false})}) )).then(fetchStatus);
+    });
+  });
+
+  // Rain controls
+  document.getElementById('rainSave').addEventListener('click', ()=>{
+    const payload = {
+      enabled: document.getElementById('rainEnabled').checked,
+      threshold: parseInt(document.getElementById('rainThreshold').value,10)
+    };
+    fetch('/api/rain', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)})
+      .then(()=> fetch('/api/rain').then(r=>r.json()).then(updateRain));
+  });
+  document.getElementById('rainRefresh').addEventListener('click', ()=> fetch('/api/rain').then(r=>r.json()).then(updateRain));
+
+  // Kick off
+  fetchStatus();
+  setInterval(fetchStatus, 60000);
+});
 </script>
-</html>"""
+</body>
+</html>
+"""
 
     @app.get("/")
     def index():
         return Response(HTML, mimetype="text/html")
 
+
+    def _split_and_sort_pins_for_view(cfg, pinman):
+        """Return (slots_sorted, spares_sorted, combined_sorted) for UI."""
+        slots, spares = [], []
+        for pin_str, meta in cfg["pins"].items():
+            pin = int(pin_str)
+            name = meta.get("name", f"Pin {pin}")
+            is_active = pinman.get_state(pin)
+            item = {"pin": pin, "name": name, "is_active": is_active}
+
+            m_slot = re.match(r"\s*Slot\s+(\d+)\b", name, re.IGNORECASE)
+            if m_slot:
+                item["_slot_num"] = int(m_slot.group(1))
+                slots.append(item)
+            else:
+                m_spare = re.search(r"\bSpare\s+(\d+)\b", name, re.IGNORECASE)
+                item["_spare_num"] = int(m_spare.group(1)) if m_spare else 10_000
+                spares.append(item)
+
+        slots.sort(key=lambda x: x.get("_slot_num", 10_000))
+        spares.sort(key=lambda x: (x.get("_spare_num", 10_000), x["pin"]))
+        return slots, spares, (slots + spares)
+
+
     @app.get("/api/status")
     def api_status():
         with LOCK:
-            # Build pin view objects keyed by BCM number
-            pin_entries = {}
-            for pin_str, meta in cfg["pins"].items():
-                pin = int(pin_str)
-                is_active = pinman.get_state(pin)
-                pin_entries[pin] = {
-                    "pin": pin,
-                    "name": meta.get("name", f"Pin {pin}"),
-                    "is_active": is_active,
-                }
-            # Order pins according to configured pin_order; fall back to
-            # numerical ordering for any missing entries
-            pins_view = []
-            order_list = []
-            # Convert stored order to ints for comparison
-            for p in cfg.get("pin_order", []):
-                try:
-                    order_list.append(int(p))
-                except Exception:
-                    pass
-            for p in order_list:
-                if p in pin_entries:
-                    pins_view.append(pin_entries.pop(p))
-            # Append any remaining pins not listed in pin_order
-            for p in sorted(pin_entries.keys()):
-                pins_view.append(pin_entries[p])
-            # Build a mapping of schedule id -> next run time (as aware datetime)
-            # by inspecting the internal scheduler jobs.  We only consider
-            # the ON jobs (jobs whose id ends with '-on-<day>').  The
-            # earliest next_run_time across all selected days is used.
+            # Sorted pins (Slots 1–16 first, then Spares)
+            slots_sorted, spares_sorted, pins_sorted = _split_and_sort_pins_for_view(cfg, pinman)
+            pins_view = pins_sorted
+
+            # Build a mapping of schedule id -> earliest next ON run time
             next_run_map = {}
             try:
                 jobs = sched.sched.get_jobs()
@@ -1963,88 +1367,71 @@ setInterval(() => { if(editingCount === 0) refresh(); }, 5000);
                         sched_id = jid.split('-on-')[0]
                         nr = getattr(job, 'next_run_time', None)
                         if nr is not None:
-                            # Keep the earliest next run
                             existing = next_run_map.get(sched_id)
                             if existing is None or nr < existing:
                                 next_run_map[sched_id] = nr
             except Exception:
-                # If scheduler introspection fails, just leave next_run_map empty
                 next_run_map = {}
-            # Build schedule view entries keyed by id
-            sched_entries = {}
+
+            # Build schedules view
+            sch_view = []
             for s in cfg.get("schedules", []):
-                # Determine next run time string if available
                 nr_dt = next_run_map.get(s["id"])
                 if nr_dt:
                     try:
-                        # Convert to local timezone for display
                         nr_str = nr_dt.astimezone().strftime("%Y-%m-%d %H:%M:%S")
                     except Exception:
                         nr_str = str(nr_dt)
                 else:
                     nr_str = None
-                sched_entries[s["id"]] = {
+
+                sch_view.append({
                     "id": s["id"],
                     "pin": int(s["pin"]),
-                    "pin_name": cfg["pins"].get(str(s["pin"]), {}).get("name", f"Pin {s['pin']}") ,
+                    "pin_name": cfg["pins"].get(str(s["pin"]), {}).get("name", f"Pin {s['pin']}"),
                     "on": s["on"],
                     "off": s["off"],
                     "day_names": [DAY_NAMES[d] for d in s.get("days", [])],
                     "days": s.get("days", []),
                     "enabled": bool(s.get("enabled", True)),
                     "next_run": nr_str,
-                }
-            # Order schedules according to schedule_order
-            sch_view = []
-            for sid in cfg.get("schedule_order", []):
-                if sid in sched_entries:
-                    sch_view.append(sched_entries.pop(sid))
-            # Append any remaining schedules not listed
-            for sid in sched_entries:
-                sch_view.append(sched_entries[sid])
+                })
+
+            # Time/meta fields
             now_dt = datetime.now().astimezone()
-            now = now_dt.strftime("%Y-%m-%d %H:%M:%S")
-            server_time = now
+            server_time_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
+            server_time_iso = now_dt.isoformat()
             server_weekday = now_dt.weekday()
             server_tz = (now_dt.tzinfo.tzname(now_dt) if now_dt.tzinfo else '')
             server_utc_offset = now_dt.strftime('%z')
-            # Include system master state in the status payload.  The
-            # system_enabled flag controls whether the controller is
-            # permitted to activate zones.  When false, manual ON
-            # commands are refused and scheduled jobs are suppressed.
+
             return jsonify({
-                "pins": pins_view,
+                "pins": pins_view,                 # combined, sorted
+                "pins_slots": slots_sorted,        # slots only
+                "pins_spares": spares_sorted,      # spares only
                 "schedules": sch_view,
                 "automation_enabled": bool(cfg.get("automation_enabled", True)),
-                "system_enabled": bool(cfg.get("system_enabled", True)),
                 "ntp": cfg.get("ntp", {}),
-                "now": now,
-                "mock_mode": USE_MOCK,
-                "server_time": server_time,
+                "now": server_time_str,            # legacy
+                "server_time": server_time_str,    # legacy
+                "server_time_iso": server_time_iso,
+                "server_time_str": server_time_str,
                 "server_weekday": server_weekday,
                 "server_tz": server_tz,
                 "server_utc_offset": server_utc_offset,
+                "mock_mode": USE_MOCK,
             })
+
 
     @app.post("/api/pin/<int:pin>/on")
     def api_pin_on(pin: int):
-        # Disallow manual activations when the system master switch is
-        # disabled.  Return a 400 with a human‑readable message so the
-        # front‑end can alert the user.  When enabled, the call is
-        # forwarded to PinManager; the trigger defaults to "manual".
-        if not bool(cfg.get("system_enabled", True)):
-            return ("System is OFF – enable system to run zones", 400)
         seconds = request.args.get("seconds", default=None, type=int)
-        # If a seconds parameter is provided via querystring we pass it on;
-        # otherwise PinManager will leave the valve on indefinitely until
-        # manually turned off by the user.
-        pinman.on(pin, seconds, trigger="manual")
+        pinman.on(pin, seconds)
         return "OK"
 
     @app.post("/api/pin/<int:pin>/off")
     def api_pin_off(pin: int):
-        # Always allow manual OFF requests, regardless of system state.
-        pinman.off(pin, trigger="manual")
+        pinman.off(pin)
         return "OK"
 
     @app.post("/api/pin/<int:pin>/name")
@@ -2269,339 +1656,6 @@ setInterval(() => { if(editingCount === 0) refresh(); }, 5000);
             save_config(cfg)
         return jsonify(rain.status())
 
-    # ------------------------------------------------------------------
-    # System master toggle
-    # ------------------------------------------------------------------
-    @app.post("/api/system")
-    def api_system_toggle():
-        """Enable or disable the entire sprinkler system.
-
-        When disabled (enabled=false) automation is turned off, all
-        valves are immediately deactivated and the PinManager refuses
-        subsequent manual ON commands.  When re‑enabled, automation is
-        restored to its previous state (stored in cfg["previous_automation_enabled"]).
-        Returns the new system_enabled state.
-        """
-        data = request.get_json(force=True) or {}
-        new_enabled = bool(data.get("enabled", False))
-        with LOCK:
-            current_enabled = bool(cfg.get("system_enabled", True))
-            # No change; return current state
-            if new_enabled == current_enabled:
-                return jsonify({"system_enabled": current_enabled})
-            if not new_enabled:
-                # Turning system off: remember automation state and disable
-                cfg["previous_automation_enabled"] = cfg.get("automation_enabled", True)
-                cfg["system_enabled"] = False
-                cfg["automation_enabled"] = False
-                # Immediately switch all zones off and cancel pending timers
-                for p in list(pinman.devices.keys()):
-                    try:
-                        pinman.off(p, trigger="system")
-                    except Exception:
-                        pass
-                save_config(cfg)
-                # Reload scheduler with automation disabled
-                sched.reload_jobs()
-                return jsonify({"system_enabled": False})
-            else:
-                # Turning system on: restore previous automation state if present
-                cfg["system_enabled"] = True
-                prev_auto = cfg.pop("previous_automation_enabled", cfg.get("automation_enabled", True))
-                cfg["automation_enabled"] = bool(prev_auto)
-                save_config(cfg)
-                # Reload scheduler now that automation may have been reenabled
-                sched.reload_jobs()
-                return jsonify({"system_enabled": True})
-
-    # ------------------------------------------------------------------
-    # Batch reorder handler
-    # ------------------------------------------------------------------
-    @app.post("/api/reorder")
-    def api_reorder():
-        """Update the UI ordering of pins and schedules.
-
-        Expects JSON with optional `pin_order` and `schedule_order`
-        lists.  `pin_order` should contain BCM numbers (strings or
-        integers) present in cfg["pins"].  `schedule_order` should
-        contain schedule ids present in cfg["schedules"].  Missing or
-        invalid entries are ignored.  Persists the new order in
-        config.json.
-        """
-        data = request.get_json(force=True) or {}
-        with LOCK:
-            changed = False
-            if isinstance(data.get("pin_order"), list):
-                # Normalise to strings and filter out unknown pins
-                new_pin_order = []
-                for val in data["pin_order"]:
-                    sval = str(val)
-                    if sval in cfg.get("pins", {}):
-                        new_pin_order.append(sval)
-                if new_pin_order:
-                    cfg["pin_order"] = new_pin_order
-                    changed = True
-            if isinstance(data.get("schedule_order"), list):
-                # Build set of valid ids
-                valid_ids = {s.get("id") for s in cfg.get("schedules", [])}
-                new_sched_order = [sid for sid in data["schedule_order"] if sid in valid_ids]
-                if new_sched_order:
-                    cfg["schedule_order"] = new_sched_order
-                    changed = True
-            if changed:
-                save_config(cfg)
-        return "OK"
-
-    # ------------------------------------------------------------------
-    # Mass save handler
-    # ------------------------------------------------------------------
-    @app.post("/api/save_all")
-    def api_save_all():
-        """Persist all edited pins and schedules in one batch.
-
-        Accepts JSON with keys:
-          pins: list of {pin: int, name: str}
-          schedules: list of {id: str, on: str, off: str, days: list[int], enabled: bool}
-          pin_order: list of pin identifiers (string/int)
-          schedule_order: list of schedule ids
-        Invalid entries are ignored.  After updating, the
-        scheduler is reloaded.
-        """
-        data = request.get_json(force=True) or {}
-        pins_data = data.get("pins") or []
-        sch_data = data.get("schedules") or []
-        new_pin_order = data.get("pin_order")
-        new_sched_order = data.get("schedule_order")
-        with LOCK:
-            # Update pin names
-            if isinstance(pins_data, list):
-                for item in pins_data:
-                    try:
-                        pnum = int(item.get("pin"))
-                    except Exception:
-                        continue
-                    name = str(item.get("name", "")).strip()
-                    if not name:
-                        continue
-                    pmeta = cfg.get("pins", {}).get(str(pnum))
-                    if pmeta is not None:
-                        pmeta["name"] = name
-            # Update schedules
-            if isinstance(sch_data, list):
-                # Build map of id -> entry for quick lookup
-                id_map = {s.get("id"): s for s in cfg.get("schedules", [])}
-                for item in sch_data:
-                    sid = item.get("id")
-                    if sid not in id_map:
-                        continue
-                    entry = id_map[sid]
-                    # on time
-                    if "on" in item:
-                        val = item.get("on")
-                        if isinstance(val, str):
-                            entry["on"] = val
-                    # off time
-                    if "off" in item:
-                        val = item.get("off")
-                        if isinstance(val, str):
-                            entry["off"] = val
-                    # enabled flag
-                    if "enabled" in item:
-                        entry["enabled"] = bool(item.get("enabled"))
-                    # days
-                    if "days" in item:
-                        days_val = item.get("days")
-                        if isinstance(days_val, list) and days_val:
-                            # ensure ints and within 0-6
-                            new_days: List[int] = []
-                            for d in days_val:
-                                try:
-                                    di = int(d)
-                                except Exception:
-                                    continue
-                                if 0 <= di <= 6:
-                                    new_days.append(di)
-                            if new_days:
-                                entry["days"] = new_days
-            # Update orders
-            if isinstance(new_pin_order, list):
-                # Filter unknown pins
-                valid_pin_keys = set(cfg.get("pins", {}).keys())
-                cfg["pin_order"] = [str(x) for x in new_pin_order if str(x) in valid_pin_keys]
-            if isinstance(new_sched_order, list):
-                valid_ids = {s.get("id") for s in cfg.get("schedules", [])}
-                cfg["schedule_order"] = [sid for sid in new_sched_order if sid in valid_ids]
-            save_config(cfg)
-        # Reload scheduler to apply changes to times/days/enabled
-        sched.reload_jobs()
-        return "OK"
-
-    # ------------------------------------------------------------------
-    # Standard preset schedule handler
-    # ------------------------------------------------------------------
-    @app.post("/api/preset/standard")
-    def api_preset_standard():
-        """Replace all schedules with the example standard schedule.
-
-        This schedule mirrors the arrangement shown in the provided
-        screenshot: zones 6,5,11,12,16,20,21,26,19 and 9 run
-        sequentially with specific on/off times.  All schedules are
-        enabled by default.  Pin 19 (garden) runs only on Tuesday
-        through Sunday.  All others run daily.
-        """
-        # Define the standard configuration: list of tuples of (pin,on,off,days)
-        standard = [
-            (6,  "22:00", "22:30", list(range(7))),
-            (5,  "22:30", "23:00", list(range(7))),
-            (11, "23:00", "23:30", list(range(7))),
-            (12, "23:30", "00:00", list(range(7))),
-            (16, "00:00", "00:30", list(range(7))),
-            (20, "00:30", "1:30",  list(range(7))),
-            (21, "1:30",  "2:00",  list(range(7))),
-            (26, "2:00",  "2:30",  list(range(7))),
-            (19, "4:00",  "4:20",  [1,2,3,4,5,6]),  # Tue–Sun
-            (9,  "2:30",  "3:00",  list(range(7))),
-        ]
-        with LOCK:
-            cfg["schedules"] = []
-            cfg["schedule_order"] = []
-            for pin_id, on_time, off_time, days in standard:
-                sched_id = str(uuid.uuid4())
-                cfg["schedules"].append({
-                    "id": sched_id,
-                    "pin": pin_id,
-                    "on": on_time,
-                    "off": off_time,
-                    "days": days,
-                    "enabled": True,
-                })
-                cfg["schedule_order"].append(sched_id)
-            save_config(cfg)
-        # Reload scheduler with new entries
-        sched.reload_jobs()
-        return "OK"
-
-    # ------------------------------------------------------------------
-    # Delete all schedules
-    # ------------------------------------------------------------------
-    @app.post("/api/schedules/delete_all")
-    def api_schedules_delete_all():
-        """Remove all schedule entries from the configuration."""
-        with LOCK:
-            cfg["schedules"] = []
-            cfg["schedule_order"] = []
-            save_config(cfg)
-        sched.reload_jobs()
-        return "OK"
-
-    # ------------------------------------------------------------------
-    # Disable all schedules
-    # ------------------------------------------------------------------
-    @app.post("/api/schedules/disable_all")
-    def api_schedules_disable_all():
-        """Disable every schedule in the configuration without removing it."""
-        with LOCK:
-            for entry in cfg.get("schedules", []):
-                entry["enabled"] = False
-            save_config(cfg)
-        sched.reload_jobs()
-        return "OK"
-
-    # ------------------------------------------------------------------
-    # Run log retrieval endpoint
-    # ------------------------------------------------------------------
-    @app.get("/api/log")
-    def api_log_get():
-        """Return run log entries.
-
-        Query parameters:
-          n (int): maximum number of entries to return (most recent first)
-          pin (int): optional pin number to filter on
-          since (str): ISO8601 timestamp; include only entries after this time
-        Returns a JSON list of log entries sorted newest first.
-        """
-        if run_log is None:
-            return jsonify([])
-        n = request.args.get("n", default=None, type=int)
-        pin_val = request.args.get("pin", default=None, type=int)
-        since = request.args.get("since", default=None, type=str)
-        events = run_log.get_events(n, pin_val, since)
-        return jsonify(events)
-
-    # ------------------------------------------------------------------
-    # Run log page
-    # ------------------------------------------------------------------
-    @app.get("/run-log")
-    def run_log_page():
-        """Serve the run log page with dynamic loading via /api/log."""
-        runlog_html = """<!doctype html>
-<html>
-<head>
-  <meta charset=\"utf-8\" />
-  <title>Sprinkler Run Log</title>
-  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
-  <style>
-    body { font-family: system-ui,sans-serif; background:#0b0f14; color:#e6edf3; margin:0; padding:0; }
-    .nav { padding:10px 20px; background:#10161d; display:flex; gap:20px; align-items:center; }
-    .nav .spacer { flex:1; }
-    .nav a { color:#58a6ff; text-decoration:none; font-weight:bold; }
-    table { width:100%; border-collapse:collapse; margin-top:20px; }
-    th, td { padding:6px; border-bottom:1px solid #1e2936; text-align:left; font-size:0.9rem; }
-    input { background:#0b0f14; color:#e6edf3; border:1px solid #1e2936; border-radius:6px; padding:4px; }
-    button { padding:6px 10px; border-radius:6px; border:0; cursor:pointer; background:#233040; color:#9fb1c1; }
-  </style>
-</head>
-<body>
-  <div class=\"nav\">
-    <span style=\"font-size:1.2rem;font-weight:bold;color:#e6edf3;\">Sprinkler Run Log</span>
-    <div class=\"spacer\"></div>
-    <a href=\"/\">Home</a>
-  </div>
-  <div style=\"padding:20px;\">
-    <div style=\"margin-bottom:10px;\">
-      <label>Max entries <input id=\"logN\" type=\"number\" value=\"50\" min=\"1\" max=\"1000\" style=\"width:80px;\"></label>
-      <label style=\"margin-left:10px;\">Pin <input id=\"logPin\" type=\"number\" style=\"width:60px;\" placeholder=\"all\"></label>
-      <label style=\"margin-left:10px;\">Since (ISO) <input id=\"logSince\" type=\"text\" style=\"width:180px;\" placeholder=\"\"></label>
-      <button onclick=\"loadLog()\" style=\"margin-left:10px;\">Refresh</button>
-    </div>
-    <table id=\"logTable\">
-      <thead><tr><th>Time</th><th>Pin</th><th>Action</th><th>Trigger</th></tr></thead>
-      <tbody></tbody>
-    </table>
-  </div>
-  <script>
-  async function loadLog() {
-    const nVal = document.getElementById('logN').value;
-    const n = nVal ? parseInt(nVal) : null;
-    const pinVal = document.getElementById('logPin').value;
-    const pin = pinVal ? parseInt(pinVal) : null;
-    const since = document.getElementById('logSince').value.trim();
-    let url = '/api/log?';
-    if(n) url += 'n=' + n + '&';
-    if(pinVal) url += 'pin=' + pin + '&';
-    if(since) url += 'since=' + encodeURIComponent(since) + '&';
-    const resp = await fetch(url);
-    const data = await resp.json();
-    const tbody = document.getElementById('logTable').querySelector('tbody');
-    tbody.innerHTML = '';
-    data.forEach(ev => {
-      const tr = document.createElement('tr');
-      const cells = [ev.time, ev.pin, ev.action, ev.trigger];
-      cells.forEach(txt => {
-        const td = document.createElement('td');
-        td.textContent = txt;
-        tr.appendChild(td);
-      });
-      tbody.appendChild(tr);
-    });
-  }
-  loadLog();
-  </script>
-</body>
-</html>
-"""
-        return Response(runlog_html, mimetype="text/html")
-
     # Remove preset API.  Presets are not exposed via the web UI in the
     # redesigned interface.  Manual schedule editing is encouraged instead.
 
@@ -2728,17 +1782,11 @@ or reapply the relevant preset.
 
 def main():
     cfg = load_config()
-    # Initialise the run log which persists activation history.  Pass
-    # this into PinManager and scheduler so they can record events.
-    runlog = RunLog(cfg)
-    pinman = PinManager(cfg, runlog)
+    pinman = PinManager(cfg)
     # Initialise the rain delay manager before creating the scheduler.
     rain_manager = RainDelayManager(cfg)
-    # Pass runlog into the scheduler so scheduled events are logged via
-    # PinManager.  The scheduler calls PinManager which already
-    # records events, but we provide runlog in case future logic needs
-    # it directly.
-    scheduler = SprinklerScheduler(pinman, cfg, rain_manager, runlog)
+    # Pass rain_manager into the scheduler so ON jobs can consult it.
+    scheduler = SprinklerScheduler(pinman, cfg, rain_manager)
 
     parser = argparse.ArgumentParser(description="GPIO sprinkler controller")
     sub = parser.add_subparsers(dest="cmd")
@@ -2822,9 +1870,8 @@ def main():
     # Web UI
     if args.cmd == "web":
         scheduler.start()
-        # Pass rain_manager and runlog into the web app so rain status
-        # and run log appear on the UI
-        app = build_app(cfg, pinman, scheduler, rain_manager, runlog)
+        # Pass rain_manager into the web app so rain status appears
+        app = build_app(cfg, pinman, scheduler, rain_manager)
         # Override host/port if provided via command line
         host = args.host
         port = args.port
@@ -2852,18 +1899,13 @@ def main():
 
     # Pin on
     if args.cmd == "on":
-        # Respect the system master switch on CLI as well.  If the
-        # system is disabled, refuse manual activations.
-        if not bool(cfg.get("system_enabled", True)):
-            print("System is OFF – enable system to run zones")
-            return
-        pinman.on(args.pin, seconds=args.seconds, trigger="manual")
+        pinman.on(args.pin, seconds=args.seconds)
         print("OK")
         return
 
     # Pin off
     if args.cmd == "off":
-        pinman.off(args.pin, trigger="manual")
+        pinman.off(args.pin)
         print("OK")
         return
 
