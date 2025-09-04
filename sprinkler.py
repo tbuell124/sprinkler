@@ -784,9 +784,12 @@ def build_app(cfg: dict, pinman: PinManager, sched: SprinklerScheduler, rain: Ra
 :root{
   --bg:#0b0f14; --card:#10161d; --border:#1e2936; --text:#e6edf3; --muted:#9fb1c1; --green:#2ecc71; --red:#e74c3c; --accent:#3399ff;
 }
+body.light{
+  --bg:#f6f8fa; --card:#ffffff; --border:#d0d7de; --text:#24292f; --muted:#57606a; --green:#2ecc71; --red:#e74c3c; --accent:#0969da;
+}
 *{box-sizing:border-box}
 body{font-family:system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:var(--bg); color:var(--text); margin:0}
-header{position:sticky; top:0; background:#081018; padding:10px 16px; display:flex; flex-wrap:wrap; gap:12px 16px; align-items:center; justify-content:space-between; border-bottom:1px solid var(--border); z-index:10}
+header{position:sticky; top:0; background:var(--card); padding:10px 16px; display:flex; flex-wrap:wrap; gap:12px 16px; align-items:center; border-bottom:1px solid var(--border); z-index:10}
 header .status{font-size:.9rem}
 .badge{padding:4px 8px; border-radius:8px; font-size:.8rem; display:inline-block}
 .badge.rain-active{background:var(--red); color:#fff}
@@ -796,7 +799,7 @@ main{padding:16px; display:flex; flex-direction:column; gap:16px}
 
 /* Cards & collapsibles */
 .card{background:var(--card); border:1px solid var(--border); border-radius:12px; overflow:hidden}
-.collap-head{display:flex; align-items:center; gap:10px; padding:12px 14px; cursor:pointer; user-select:none; background:#0d141b}
+.collap-head{display:flex; align-items:center; gap:10px; padding:12px 14px; cursor:pointer; user-select:none; background:var(--bg)}
 .collap-head h2{margin:0; font-size:1.05rem}
 .collap-head .sub{margin-left:auto; font-size:.85rem; color:var(--muted)}
 .chev{margin-left:6px; transition:transform .2s ease}
@@ -814,7 +817,7 @@ main{padding:16px; display:flex; flex-direction:column; gap:16px}
   background:var(--bg); border:1px solid var(--border); border-radius:10px;
   padding:8px 10px;
 }
-.pin-row .dot{width:8px; height:8px; border-radius:50%; background:#666}
+.pin-row .dot{width:8px; height:8px; border-radius:50%; background:var(--muted)}
 .pin-row .dot.on{background:var(--green)}
 .pin-row .gpio{font:600 12px ui-monospace, Menlo, monospace; color:#93a4b5}
 .pin-row input.pin-name{
@@ -830,7 +833,7 @@ button.ghost{background:transparent; border:1px solid var(--border)}
 /* switch */
 .switch{position:relative; width:42px; height:24px; flex:0 0 auto}
 .switch input{opacity:0; width:0; height:0}
-.slider{position:absolute; inset:0; background:#555; border-radius:34px; transition:.2s}
+.slider{position:absolute; inset:0; background:var(--muted); border-radius:34px; transition:.2s}
 .slider:before{content:""; position:absolute; height:18px; width:18px; left:3px; bottom:3px; background:#fff; border-radius:50%; transition:.2s}
 .switch input:checked + .slider{background:var(--green)}
 .switch input:checked + .slider:before{transform:translateX(18px)}
@@ -838,7 +841,7 @@ button.ghost{background:transparent; border:1px solid var(--border)}
 /* Schedules */
 table.sched-grid{width:100%; border-collapse:collapse}
 .sched-grid th,.sched-grid td{border-bottom:1px solid var(--border); padding:6px; font-size:.8rem; text-align:left; vertical-align:top}
-.sched-grid th{background:#0d141b}
+.sched-grid th{background:var(--bg)}
 .sched-grid tr.disabled{opacity:.55}
 .sched-grid .next-run{color:var(--green); font-weight:600}
 
@@ -858,6 +861,7 @@ input[type="number"]{width:90px}
   <div class="status" id="timeBar"></div>
   <div class="status" id="automationBar"></div>
   <span class="badge" id="rainBadge">Rain Delay</span>
+  <button class="btn" id="themeToggle" style="margin-left:auto">Light Mode</button>
 </header>
 
 <main>
@@ -1276,6 +1280,22 @@ function updateRain(rd){
   }
 }
 document.addEventListener('DOMContentLoaded', ()=>{
+  // Theme toggle
+  const themeBtn = document.getElementById('themeToggle');
+  if(themeBtn){
+    const applyTheme = (th)=>{
+      document.body.classList.toggle('light', th === 'light');
+      themeBtn.textContent = th === 'light' ? 'Dark Mode' : 'Light Mode';
+    };
+    const initial = localStorage.getItem('theme') === 'light' ? 'light' : 'dark';
+    applyTheme(initial);
+    themeBtn.addEventListener('click', ()=>{
+      const next = document.body.classList.contains('light') ? 'dark' : 'light';
+      localStorage.setItem('theme', next);
+      applyTheme(next);
+    });
+  }
+
   // Add Schedule
   document.getElementById('addScheduleBtn').addEventListener('click', ()=>{
     const pin = parseInt(document.getElementById('newSchedPin').value,10);
