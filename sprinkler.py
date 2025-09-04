@@ -183,33 +183,33 @@ LOCK = threading.RLock()
 DEFAULT_CONFIG = {
 "pins": {
     # ---- Slots 1–16 (left -> right exactly as on the board) ----
-    "12": {"name": "Slot 1 - Driveway",  "mode": "out", "active_high": True, "initial": False},
-    "16": {"name": "Slot 2 - Back Middle",  "mode": "out", "active_high": True, "initial": False},
-    "20": {"name": "Slot 3 - Deck Corner",  "mode": "out", "active_high": True, "initial": False},
-    "21": {"name": "Slot 4 - House Corner",  "mode": "out", "active_high": True, "initial": False},
-    "26": {"name": "Slot 5 - Front Middle",  "mode": "out", "active_high": True, "initial": False},
-    "19": {"name": "Slot 6 - Garden",  "mode": "out", "active_high": True, "initial": False},
-    "13": {"name": "Slot 7 - Side Back",  "mode": "out", "active_high": True, "initial": False},
-    "6":  {"name": "Slot 8 - Walkway",  "mode": "out", "active_high": True, "initial": False},
-    "5":  {"name": "Slot 9 - Front Right",  "mode": "out", "active_high": True, "initial": False},
-    "11": {"name": "Slot 10 - Side Front", "mode": "out", "active_high": True, "initial": False},
-    "9":  {"name": "Slot 11 - Side Middle", "mode": "out", "active_high": True, "initial": False},
-    "10": {"name": "Slot 12", "mode": "out", "active_high": True, "initial": False},
-    "22": {"name": "Slot 13", "mode": "out", "active_high": True, "initial": False},
-    "27": {"name": "Slot 14", "mode": "out", "active_high": True, "initial": False},
-    "17": {"name": "Slot 15", "mode": "out", "active_high": True, "initial": False},
-    "4":  {"name": "Slot 16", "mode": "out", "active_high": True, "initial": False},
+    "12": {"name": "Slot 1 - Driveway",  "mode": "out", "active_high": True, "initial": False, "section": "active"},
+    "16": {"name": "Slot 2 - Back Middle",  "mode": "out", "active_high": True, "initial": False, "section": "active"},
+    "20": {"name": "Slot 3 - Deck Corner",  "mode": "out", "active_high": True, "initial": False, "section": "active"},
+    "21": {"name": "Slot 4 - House Corner",  "mode": "out", "active_high": True, "initial": False, "section": "active"},
+    "26": {"name": "Slot 5 - Front Middle",  "mode": "out", "active_high": True, "initial": False, "section": "active"},
+    "19": {"name": "Slot 6 - Garden",  "mode": "out", "active_high": True, "initial": False, "section": "active"},
+    "13": {"name": "Slot 7 - Side Back",  "mode": "out", "active_high": True, "initial": False, "section": "active"},
+    "6":  {"name": "Slot 8 - Walkway",  "mode": "out", "active_high": True, "initial": False, "section": "active"},
+    "5":  {"name": "Slot 9 - Front Right",  "mode": "out", "active_high": True, "initial": False, "section": "active"},
+    "11": {"name": "Slot 10 - Side Front", "mode": "out", "active_high": True, "initial": False, "section": "active"},
+    "9":  {"name": "Slot 11 - Side Middle", "mode": "out", "active_high": True, "initial": False, "section": "active"},
+    "10": {"name": "Slot 12", "mode": "out", "active_high": True, "initial": False, "section": "active"},
+    "22": {"name": "Slot 13", "mode": "out", "active_high": True, "initial": False, "section": "active"},
+    "27": {"name": "Slot 14", "mode": "out", "active_high": True, "initial": False, "section": "active"},
+    "17": {"name": "Slot 15", "mode": "out", "active_high": True, "initial": False, "section": "active"},
+    "4":  {"name": "Slot 16", "mode": "out", "active_high": True, "initial": False, "section": "active"},
 
     # ---- Remaining controllable GPIOs as sequential Spares ----
     # (All BCMs commonly available on the 40-pin header except those already used above)
-    "7":  {"name": "Spare 3",  "mode": "out", "active_high": True, "initial": False},
-    "8":  {"name": "Spare 4",  "mode": "out", "active_high": True, "initial": False},
-    "14": {"name": "Spare 5",  "mode": "out", "active_high": True, "initial": False},
-    "15": {"name": "Spare 6",  "mode": "out", "active_high": True, "initial": False},
-    "18": {"name": "Spare 7",  "mode": "out", "active_high": True, "initial": False},
-    "23": {"name": "Spare 8",  "mode": "out", "active_high": True, "initial": False},
-    "24": {"name": "Spare 9",  "mode": "out", "active_high": True, "initial": False},
-    "25": {"name": "Spare 10", "mode": "out", "active_high": True, "initial": False}
+    "7":  {"name": "Spare 3",  "mode": "out", "active_high": True, "initial": False, "section": "spare"},
+    "8":  {"name": "Spare 4",  "mode": "out", "active_high": True, "initial": False, "section": "spare"},
+    "14": {"name": "Spare 5",  "mode": "out", "active_high": True, "initial": False, "section": "spare"},
+    "15": {"name": "Spare 6",  "mode": "out", "active_high": True, "initial": False, "section": "spare"},
+    "18": {"name": "Spare 7",  "mode": "out", "active_high": True, "initial": False, "section": "spare"},
+    "23": {"name": "Spare 8",  "mode": "out", "active_high": True, "initial": False, "section": "spare"},
+    "24": {"name": "Spare 9",  "mode": "out", "active_high": True, "initial": False, "section": "spare"},
+    "25": {"name": "Spare 10", "mode": "out", "active_high": True, "initial": False, "section": "spare"}
 },
     # Schedule definitions live in this list.  Preset commands will
     # repopulate this list.  Each entry contains: id, pin, on, off,
@@ -1109,19 +1109,10 @@ function stopCountdown(pin){
   }
 let dragEl;
 function sendPinOrder(){
-  const active = [...document.querySelectorAll('#activeList .pin-row')];
-  const spare  = [...document.querySelectorAll('#spareList .pin-row')];
-  const order = active.concat(spare).map(r=>parseInt(r.dataset.pin,10));
-  const reqs = [fetch('/api/pins/reorder', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({order})})];
-  active.forEach((r, i)=>{
-    const name = `Slot ${i+1}`;
-    reqs.push(fetch(`/api/pin/${r.dataset.pin}/name`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name})}));
-  });
-  spare.forEach((r, i)=>{
-    const name = `Spare ${i+1}`;
-    reqs.push(fetch(`/api/pin/${r.dataset.pin}/name`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name})}));
-  });
-  Promise.all(reqs).then(fetchStatus);
+  const active = [...document.querySelectorAll('#activeList .pin-row')].map(r=>parseInt(r.dataset.pin,10));
+  const spare  = [...document.querySelectorAll('#spareList .pin-row')].map(r=>parseInt(r.dataset.pin,10));
+  fetch('/api/pins/reorder', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({active, spare})})
+    .then(fetchStatus);
 }
 
 function setupPinDrag(list){
@@ -1483,6 +1474,15 @@ document.getElementById('deleteAllSchedules')?.addEventListener('click', ()=>{
                 "_order": meta.get("order"),
             }
 
+            section = meta.get("section")
+            if section == "active":
+                slots.append(item)
+                continue
+            if section == "spare":
+                spares.append(item)
+                continue
+
+            # Fallback for legacy configs without explicit sections
             m_slot = re.match(r"\s*Slot\s+(\d+)\b", name, re.IGNORECASE)
             if m_slot:
                 item["_slot_num"] = int(m_slot.group(1))
@@ -1610,22 +1610,37 @@ document.getElementById('deleteAllSchedules')?.addEventListener('click', ()=>{
 
     @app.post("/api/pins/reorder")
     def api_pins_reorder():
-        """Update order of pins based on a list of pin numbers."""
+        """Update section membership and order of pins.
+
+        Expects JSON like {"active": [5,6], "spare": [7]} representing the
+        pins in each section.  All pins must be present exactly once across the
+        two lists.  Each pin will have its "section" set to either "active" or
+        "spare" and an "order" relative to others in that section.
+        """
         data = request.get_json(force=True) or {}
-        order = data.get("order")
-        if not isinstance(order, list):
+        active = data.get("active")
+        spare = data.get("spare")
+        if not isinstance(active, list) or not isinstance(spare, list):
             return ("Invalid order", 400)
         try:
-            order_int = [int(p) for p in order]
+            active_int = [int(p) for p in active]
+            spare_int = [int(p) for p in spare]
         except Exception:
             return ("Invalid order", 400)
+        combined = active_int + spare_int
         with LOCK:
             pins_cfg = cfg.setdefault("pins", {})
-            if set(map(str, order_int)) != set(pins_cfg.keys()):
+            if set(map(str, combined)) != set(pins_cfg.keys()):
                 return ("Order must contain all pins", 400)
-            for idx, pin in enumerate(order_int):
-                pins_cfg[str(pin)]["order"] = idx
-            cfg["pins"] = {str(pin): pins_cfg[str(pin)] for pin in order_int}
+            for idx, pin in enumerate(active_int):
+                meta = pins_cfg[str(pin)]
+                meta["section"] = "active"
+                meta["order"] = idx
+            for idx, pin in enumerate(spare_int):
+                meta = pins_cfg[str(pin)]
+                meta["section"] = "spare"
+                meta["order"] = idx
+            cfg["pins"] = {str(pin): pins_cfg[str(pin)] for pin in combined}
             save_config(cfg)
         return "OK"
 

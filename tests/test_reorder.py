@@ -38,8 +38,10 @@ def test_reorder_schedules():
 def test_reorder_pins():
     app, cfg = build_app()
     client = app.test_client()
-    resp = client.post('/api/pins/reorder', json={"order": [6, 5]})
+    resp = client.post('/api/pins/reorder', json={"active": [6], "spare": [5]})
     assert resp.status_code == 200
     assert list(cfg["pins"].keys()) == ["6", "5"]
     assert cfg["pins"]["6"]["order"] == 0
-    assert cfg["pins"]["5"]["order"] == 1
+    assert cfg["pins"]["6"]["section"] == "active"
+    assert cfg["pins"]["5"]["order"] == 0
+    assert cfg["pins"]["5"]["section"] == "spare"
