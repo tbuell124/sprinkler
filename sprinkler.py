@@ -913,7 +913,7 @@ input[type="number"]{width:90px}
           </div>
           <div style="margin-top:8px; display:flex; gap:8px">
             <button id="addScheduleBtn" class="btn primary">Add</button>
-            <button id="addActiveBtn" class="btn">Add Active Pins</button>
+            <button id="addActivePinsBtn" class="btn">Add Active Pins</button>
             <button id="disableAllSchedules" class="btn">Disable All</button>
             <button id="deleteAllSchedules" class="btn">Delete All</button>
           </div>
@@ -1403,7 +1403,7 @@ document.addEventListener('DOMContentLoaded', ()=>{
       .then(r=>r.ok?fetchStatus():r.text().then(t=>alert(t)));
   });
 
-  document.getElementById('addActiveBtn').addEventListener('click', ()=>{
+  document.getElementById('addActivePinsBtn').addEventListener('click', ()=>{
     const onVal = document.getElementById('newSchedOn').value.trim();
     const durVal = document.getElementById('newSchedDur').value.trim();
     const days = [...document.querySelectorAll('#newSchedDays input[type=checkbox]')].filter(cb=>cb.checked).map(cb=>parseInt(cb.value,10));
