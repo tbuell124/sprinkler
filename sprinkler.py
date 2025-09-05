@@ -792,7 +792,7 @@ main{padding:16px; display:flex; flex-direction:column; gap:16px}
 .chev{margin-left:6px; transition:transform .2s ease}
 .collap.open .chev{transform:rotate(90deg)}
 .collap-body{max-height:0; overflow:hidden; transition:max-height .25s ease}
-.collap.open .collap-body{max-height:2000px} /* roomy enough for content */
+.collap.open .collap-body{max-height:none} /* allow unlimited content */
 .section-pad{padding:12px}
 
 .warning{color:var(--red); font-size:.9rem; display:none; margin:8px 0}
@@ -831,6 +831,7 @@ table.sched-grid{width:100%; border-collapse:collapse}
 .sched-grid th{background:var(--bg)}
 .sched-grid tr.disabled{opacity:.55}
 .sched-grid .next-run{color:var(--green); font-weight:600}
+.sched-wrapper{overflow-x:auto}
 
 /* Rain */
 .row{display:flex; flex-wrap:wrap; gap:10px; align-items:center}
@@ -840,6 +841,7 @@ input[type="number"]{width:90px}
 
 @media (max-width:600px){
   .sched-grid th,.sched-grid td{font-size:.72rem}
+  .sched-grid{min-width:480px}
 }
 </style>
 </head>
@@ -891,13 +893,7 @@ input[type="number"]{width:90px}
     </div>
     <div class="collap-body" id="schedulesBody">
       <div class="section-pad">
-        <table class="sched-grid">
-          <thead>
-            <tr><th>Zone</th><th>On</th><th>Off</th><th>Days</th><th>Enabled</th><th>Next</th><th>Action</th></tr>
-          </thead>
-          <tbody id="schedBody"></tbody>
-        </table>
-        <div class="add-sched" style="margin-top:12px;">
+        <div class="add-sched" style="margin-bottom:12px;">
           <h3 style="margin:12px 0 8px; font-size:.95rem; color:var(--muted)">Add Schedule</h3>
           <label>Pin <select id="newSchedPin"></select></label>
           <label>On <input id="newSchedOn" type="text" placeholder="HH:MM" size="5"></label>
@@ -918,6 +914,14 @@ input[type="number"]{width:90px}
             <button id="disableAllSchedules" class="btn">Disable All</button>
             <button id="deleteAllSchedules" class="btn">Delete All</button>
           </div>
+        </div>
+        <div class="sched-wrapper">
+          <table class="sched-grid">
+            <thead>
+              <tr><th>Zone</th><th>On</th><th>Off</th><th>Days</th><th>Enabled</th><th>Next</th><th>Action</th></tr>
+            </thead>
+            <tbody id="schedBody"></tbody>
+          </table>
         </div>
         <div class="seq-sched" style="margin-top:20px;">
           <h3 style="margin:12px 0 8px; font-size:.95rem; color:var(--muted)">Sequence Schedules</h3>
