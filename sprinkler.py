@@ -216,6 +216,7 @@ DEFAULT_CONFIG = {
     # days (list of weekday numbers) and enabled.
     "schedules": [],
     "automation_enabled": True,
+    "default_manual_seconds": 600,
     # NTP options for timedatectl integration.  Enabled controls
     # whether NTP is active; server selects the pool or host for
     # synchronisation.
@@ -769,10 +770,7 @@ def build_app(cfg: dict, pinman: PinManager, sched: SprinklerScheduler, rain: Ra
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
 :root{
-  --bg:#0b0f14; --card:#10161d; --border:#1e2936; --text:#e6edf3; --muted:#9fb1c1; --green:#2ecc71; --red:#e74c3c; --accent:#3399ff;
-}
-body.light{
-  --bg:#f6f8fa; --card:#ffffff; --border:#d0d7de; --text:#24292f; --muted:#57606a; --green:#2ecc71; --red:#e74c3c; --accent:#0969da;
+  --bg:#0b0f14; --card:#10161d; --border:#1e2936; --text:#e6edf3; --muted:#9fb1c1; --accent:#e74c3c; --red:#ff5555;
 }
 *{box-sizing:border-box}
 body{font-family:system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:var(--bg); color:var(--text); margin:0}
@@ -780,7 +778,7 @@ header{position:sticky; top:0; background:var(--card); padding:10px 16px; displa
 header .status{font-size:.9rem}
 .badge{padding:4px 8px; border-radius:8px; font-size:.8rem; display:inline-block}
 .badge.rain-active{background:var(--red); color:#fff}
-.badge.rain-inactive{background:var(--green); color:#000}
+.badge.rain-inactive{background:var(--accent); color:#000}
 
 main{padding:16px; display:flex; flex-direction:column; gap:16px}
 
@@ -800,20 +798,20 @@ main{padding:16px; display:flex; flex-direction:column; gap:16px}
 /* Single-column lists with compact, horizontal controls */
 .list{display:flex; flex-direction:column; gap:8px}
 .pin-row{
-  display:flex; align-items:center; gap:10px;
+  display:flex; align-items:center; gap:6px;
   background:var(--bg); border:1px solid var(--border); border-radius:10px;
-  padding:8px 10px;
+  padding:6px 8px;
 }
 .pin-row .dot{width:8px; height:8px; border-radius:50%; background:var(--muted)}
-.pin-row .dot.on{background:var(--green)}
+.pin-row .dot.on{background:var(--accent)}
 .pin-row .gpio{font:600 12px ui-monospace, Menlo, monospace; color:#93a4b5}
 .pin-row input.pin-name{
-  min-width:140px; flex:1; background:transparent; border:none; color:var(--green); font-weight:600
+  min-width:140px; flex:1; background:transparent; border:none; color:var(--accent); font-weight:600
 }
-.pin-row input.pin-name:focus{outline:1px solid var(--green); border-radius:6px; padding:2px 4px}
-.pin-row .mins{width:64px; background:transparent; border:1px solid var(--border); border-radius:6px; padding:4px 6px; color:var(--text); font-size:.9rem; text-align:center}
+.pin-row input.pin-name:focus{outline:1px solid var(--accent); border-radius:6px; padding:2px 4px}
+.pin-row .pin-label{flex:1; font-weight:600; color:var(--accent)}
 button.btn{padding:6px 10px; font-size:.85rem; border:0; border-radius:8px; cursor:pointer; background:var(--border); color:var(--text)}
-button.primary{background:var(--green); color:#000}
+button.primary{background:var(--accent); color:#000}
 button.ghost{background:transparent; border:1px solid var(--border)}
 .countdown{font-size:.8rem; color:var(--muted); margin-left:auto}
 
@@ -822,7 +820,7 @@ button.ghost{background:transparent; border:1px solid var(--border)}
 .switch input{opacity:0; width:0; height:0}
 .slider{position:absolute; inset:0; background:var(--muted); border-radius:34px; transition:.2s}
 .slider:before{content:""; position:absolute; height:18px; width:18px; left:3px; bottom:3px; background:#fff; border-radius:50%; transition:.2s}
-.switch input:checked + .slider{background:var(--green)}
+.switch input:checked + .slider{background:var(--accent)}
 .switch input:checked + .slider:before{transform:translateX(18px)}
 
 /* Schedules */
@@ -830,7 +828,7 @@ table.sched-grid{width:100%; border-collapse:collapse}
 .sched-grid th,.sched-grid td{border-bottom:1px solid var(--border); padding:6px; font-size:.8rem; text-align:left; vertical-align:top}
 .sched-grid th{background:var(--bg)}
 .sched-grid tr.disabled{opacity:.55}
-.sched-grid .next-run{color:var(--green); font-weight:600}
+.sched-grid .next-run{color:var(--accent); font-weight:600}
 .sched-wrapper{overflow-x:auto}
 
 /* Rain */
@@ -838,6 +836,12 @@ table.sched-grid{width:100%; border-collapse:collapse}
 label.inline{display:flex; align-items:center; gap:8px; font-size:.9rem}
 input[type="number"], input[type="text"], select{background:transparent; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:6px 8px; font-size:.9rem}
 input[type="number"]{width:90px}
+input.time{width:80px}
+
+.dropdown{position:relative; display:inline-block}
+.dropdown-menu{display:none; position:absolute; background:var(--card); border:1px solid var(--border); border-radius:8px; padding:6px; z-index:30; min-width:120px}
+.dropdown.open .dropdown-menu{display:block}
+.dropdown-menu label{display:flex; align-items:center; gap:6px; margin-bottom:4px; font-size:.85rem}
 
 @media (max-width:600px){
   .sched-grid th,.sched-grid td{font-size:.72rem}
@@ -850,7 +854,7 @@ input[type="number"]{width:90px}
   <div class="status" id="timeBar"></div>
   <div class="status" id="automationBar"></div>
   <span class="badge" id="rainBadge">Rain Delay</span>
-  <button class="btn" id="themeToggle" style="margin-left:auto">Light Mode</button>
+  <button class="btn" id="settingsBtn" style="margin-left:auto">Settings</button>
 </header>
 
 <main>
@@ -893,27 +897,25 @@ input[type="number"]{width:90px}
     </div>
     <div class="collap-body" id="schedulesBody">
       <div class="section-pad">
-        <div class="add-sched" style="margin-bottom:12px;">
-          <h3 style="margin:12px 0 8px; font-size:.95rem; color:var(--muted)">Add Schedule</h3>
-          <label>Pin <select id="newSchedPin"></select></label>
-          <label>On <input id="newSchedOn" type="text" placeholder="HH:MM" size="5"></label>
-          <label>Off <input id="newSchedOff" type="text" placeholder="HH:MM" size="5"></label>
-          <label>Duration <input id="newSchedDur" type="text" placeholder="HH:MM" size="5"></label>
-          <div id="newSchedDays" class="row" style="margin-top:6px;">
-            <label><input type="checkbox" value="0">Mon</label>
-            <label><input type="checkbox" value="1">Tue</label>
-            <label><input type="checkbox" value="2">Wed</label>
-            <label><input type="checkbox" value="3">Thu</label>
-            <label><input type="checkbox" value="4">Fri</label>
-            <label><input type="checkbox" value="5">Sat</label>
-            <label><input type="checkbox" value="6">Sun</label>
+        <div class="schedule-controls" style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:12px;">
+          <label>Start <input id="seqStart" type="text" placeholder="HH:MM" class="time"></label>
+          <label>Duration <input id="seqDur" type="text" placeholder="HH:MM" class="time"></label>
+          <div class="dropdown" id="dayDropdown">
+            <button id="dayDropBtn" class="btn">All</button>
+            <div class="dropdown-menu" id="dayDropMenu">
+              <label><input type="checkbox" value="0" checked>Mon</label>
+              <label><input type="checkbox" value="1" checked>Tue</label>
+              <label><input type="checkbox" value="2" checked>Wed</label>
+              <label><input type="checkbox" value="3" checked>Thu</label>
+              <label><input type="checkbox" value="4" checked>Fri</label>
+              <label><input type="checkbox" value="5" checked>Sat</label>
+              <label><input type="checkbox" value="6" checked>Sun</label>
+            </div>
           </div>
-          <div style="margin-top:8px; display:flex; gap:8px">
-            <button id="addScheduleBtn" class="btn primary">Add</button>
-            <button id="addActiveBtn" class="btn">Add Active</button>
-            <button id="disableAllSchedules" class="btn">Disable All</button>
-            <button id="deleteAllSchedules" class="btn">Delete All</button>
-          </div>
+          <button id="addActiveBtn" class="btn">Add Active</button>
+          <button id="changeSeqBtn" class="btn">Change Sequence</button>
+          <button id="disableAllSchedules" class="btn">Disable All</button>
+          <button id="deleteAllSchedules" class="btn">Delete All</button>
         </div>
         <div class="sched-wrapper">
           <table class="sched-grid">
@@ -922,12 +924,6 @@ input[type="number"]{width:90px}
             </thead>
             <tbody id="schedBody"></tbody>
           </table>
-        </div>
-        <div class="seq-sched" style="margin-top:20px;">
-          <h3 style="margin:12px 0 8px; font-size:.95rem; color:var(--muted)">Sequence Schedules</h3>
-          <label>Start <input id="seqStart" type="text" placeholder="HH:MM" size="5"></label>
-          <label>Duration <input id="seqDur" type="text" placeholder="HH:MM" size="5"></label>
-          <button id="runSeqBtn" class="btn">Run Sequence</button>
         </div>
       </div>
     </div>
@@ -949,6 +945,23 @@ input[type="number"]{width:90px}
           <button class="btn ghost" id="rainRefresh">Refresh</button>
         </div>
         <div id="rainStatus" style="color:var(--muted)"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Settings (collapsible) -->
+  <section class="card collap" id="settingsCard">
+    <div class="collap-head" data-target="settingsBody">
+      <h2>Settings</h2>
+      <div class="chev">▶</div>
+    </div>
+    <div class="collap-body" id="settingsBody">
+      <div class="section-pad">
+        <div class="row" style="margin-bottom:12px; gap:8px; align-items:center;">
+          <label class="inline">Default Run (mins) <input type="number" id="defManualMins" min="1"></label>
+          <button class="btn primary" id="saveSettings">Save</button>
+        </div>
+        <div id="settingsPinsList" class="list"></div>
       </div>
     </div>
   </section>
@@ -978,6 +991,7 @@ function bySlotThenGpio(pins){
 }
 var countdownTimers = {};
 var currentSchedules = [];
+var defaultManualSecs = 600;
 function fmtTime(s){
   var m = Math.floor(s/60), r = s % 60;
   return String(m) + ":" + String(r).padStart(2,'0');
@@ -999,10 +1013,13 @@ function toHHMM(total){
 /* ========= Data flow ========= */
 function fetchStatus(){
   fetch('/api/status').then(r=>r.json()).then(data=>{
+    defaultManualSecs = data.default_manual_seconds || 600;
     updateHeader(data);
     renderPinsGrouped(data.pins_slots, data.pins_spares, data.automation_enabled);
     updateSchedules(data.schedules);
-    hydratePinSelect(data.pins);
+    renderSettingsPins(data.pins);
+    const def = document.getElementById('defManualMins');
+    if(def){ def.value = Math.round(defaultManualSecs/60); }
   });
   fetch('/api/rain').then(r=>r.json()).then(updateRain).catch(()=>{});
 }
@@ -1042,40 +1059,23 @@ function makePinRow(p, automationEnabled){
   const row = document.createElement('div'); row.className='pin-row'; row.draggable=true; row.dataset.pin = p.pin;
 
   const dot = document.createElement('span'); dot.className='dot'+(p.is_active?' on':''); row.appendChild(dot);
-  var gpio = document.createElement('span'); gpio.className='gpio'; gpio.textContent='GPIO ' + p.pin; row.appendChild(gpio);
 
-var name = document.createElement('input'); name.className='pin-name'; name.value = p.name || ('GPIO ' + p.pin);
-name.addEventListener('change', function(){
-  var newName = name.value.trim();
-  fetch('/api/pin/' + p.pin + '/name', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name:newName})});
-});
-  row.appendChild(name);
+  const name = document.createElement('span'); name.className='pin-label'; name.textContent = p.name || ('GPIO ' + p.pin); row.appendChild(name);
 
   const sw = document.createElement('label'); sw.className='switch';
   const sb = document.createElement('input'); sb.type='checkbox'; sb.checked=!!p.is_active; sb.disabled=!automationEnabled;
   sb.addEventListener('change', function(){
-  fetch('/api/pin/' + p.pin + '/' + (sb.checked ? 'on' : 'off'), {method:'POST'});
-});
+    fetch('/api/pin/' + p.pin + '/' + (sb.checked ? 'on' : 'off'), {method:'POST'});
+    if(!sb.checked){ stopCountdown(p.pin); }
+  });
   const slider = document.createElement('span'); slider.className='slider';
   sw.appendChild(sb); sw.appendChild(slider); row.appendChild(sw);
 
-  const mins = document.createElement('input'); mins.type='text'; mins.value='10'; mins.className='mins'; mins.title='Minutes';
-  row.appendChild(mins);
-
-  const run = document.createElement('button'); run.className='btn primary'; run.textContent='RUN';
+  const run = document.createElement('button'); run.className='btn primary'; run.textContent='START';
   run.addEventListener('click', ()=>{
-    const m = parseInt(mins.value,10); if(!Number.isFinite(m)||m<=0) return alert('Enter minutes > 0');
-    var secs = m*60;
-fetch('/api/pin/' + p.pin + '/on?seconds=' + secs, {method:'POST'}).then(function(){ startCountdown(p.pin, secs); });
+    fetch('/api/pin/' + p.pin + '/on?seconds=' + defaultManualSecs, {method:'POST'}).then(function(){ startCountdown(p.pin, defaultManualSecs); });
   });
   row.appendChild(run);
-
-  const stop = document.createElement('button'); stop.className='btn'; stop.textContent='STOP';
-  stop.addEventListener('click', ()=>{
-    fetch(`/api/pin/${p.pin}/off`, {method:'POST'}).then(()=> stopCountdown(p.pin));
-    stopCountdown(p.pin);
-  });
-  row.appendChild(stop);
 
   var cd = document.createElement('span'); cd.id='countdown-' + p.pin; cd.className='countdown'; row.appendChild(cd);
 
@@ -1110,7 +1110,23 @@ function stopCountdown(pin){
   }
 }
 
-  }
+function renderSettingsPins(pins){
+  const list = document.getElementById('settingsPinsList');
+  if(!list) return;
+  list.innerHTML='';
+  pins.forEach(p=>{
+    const row = document.createElement('div'); row.className='pin-row';
+    const gpio = document.createElement('span'); gpio.className='gpio'; gpio.textContent='GPIO ' + p.pin; row.appendChild(gpio);
+    const name = document.createElement('input'); name.className='pin-name'; name.value = p.name || ('GPIO ' + p.pin);
+    name.addEventListener('change', ()=>{
+      var newName = name.value.trim();
+      fetch('/api/pin/' + p.pin + '/name', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name:newName})});
+    });
+    row.appendChild(name);
+    list.appendChild(row);
+  });
+}
+
 let dragEl;
 function sendPinOrder(){
   const active = [...document.querySelectorAll('#activeList .pin-row')].map(r=>parseInt(r.dataset.pin,10));
@@ -1162,7 +1178,7 @@ function setupPinDrag(list){
     var inpOn = document.createElement('input');
     inpOn.type = 'text';
     inpOn.value = s.on;
-    inpOn.size = 5;
+    inpOn.className = 'time';
     inpOn.addEventListener('change', function(idRef, el){
       return function(){ updateSchedule(idRef, {on: el.value}); };
     }(s.id, inpOn));
@@ -1174,7 +1190,7 @@ function setupPinDrag(list){
     var inpOff = document.createElement('input');
     inpOff.type = 'text';
     inpOff.value = s.off;
-    inpOff.size = 5;
+    inpOff.className = 'time';
     inpOff.addEventListener('change', function(idRef, el){
       return function(){ updateSchedule(idRef, {off: el.value}); };
     }(s.id, inpOff));
@@ -1290,17 +1306,6 @@ function setupPinDrag(list){
   document.getElementById('schedSummary').textContent =
   schedules.length + ' schedule' + (schedules.length!==1 ? 's' : '');
 }
-function hydratePinSelect(_){
-  fetch('/api/status').then(r=>r.json()).then(data=>{
-    const sel = document.getElementById('newSchedPin'); sel.innerHTML='';
-    [...data.pins_slots, ...data.pins_spares].forEach(p=>{
-      var o=document.createElement('option');
-o.value = p.pin;
-o.textContent = 'GPIO ' + p.pin + ' — ' + (p.name || ('GPIO ' + p.pin));
-sel.appendChild(o);
-    });
-  });
-}
   function updateSchedule(id, obj){
     fetch(`/api/schedule/${id}`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(obj)}).then(fetchStatus);
   }
@@ -1354,6 +1359,27 @@ function sequenceSchedules(){
   Promise.all(promises).then(fetchStatus);
 }
 
+function getSelectedDays(){
+  return [...document.querySelectorAll('#dayDropMenu input[type=checkbox]')]
+    .filter(cb=>cb.checked).map(cb=>parseInt(cb.value,10));
+}
+
+function updateDayBtn(){
+  const days = getSelectedDays();
+  const btn = document.getElementById('dayDropBtn');
+  if(btn){ btn.textContent = days.length===7 ? 'All' : days.map(d=>DAY_NAMES[d]).join(','); }
+}
+
+function setupDayDropdown(){
+  const dd = document.getElementById('dayDropdown');
+  const btn = document.getElementById('dayDropBtn');
+  if(!dd || !btn) return;
+  btn.addEventListener('click', e=>{ e.stopPropagation(); dd.classList.toggle('open'); });
+  document.addEventListener('click', e=>{ if(!dd.contains(e.target)) dd.classList.remove('open'); });
+  dd.querySelectorAll('input[type=checkbox]').forEach(cb=> cb.addEventListener('change', updateDayBtn));
+  updateDayBtn();
+}
+
   /* ========= Rain ========= */
   function updateRain(rd){
   var badge = document.getElementById('rainBadge');
@@ -1378,68 +1404,47 @@ function sequenceSchedules(){
   }
 }
 document.addEventListener('DOMContentLoaded', ()=>{
-  // Theme toggle
-  const themeBtn = document.getElementById('themeToggle');
-  if(themeBtn){
-    const applyTheme = (th)=>{
-      document.body.classList.toggle('light', th === 'light');
-      themeBtn.textContent = th === 'light' ? 'Dark Mode' : 'Light Mode';
-    };
-    const initial = localStorage.getItem('theme') === 'light' ? 'light' : 'dark';
-    applyTheme(initial);
-    themeBtn.addEventListener('click', ()=>{
-      const next = document.body.classList.contains('light') ? 'dark' : 'light';
-      localStorage.setItem('theme', next);
-      applyTheme(next);
-    });
-  }
-
   setupPinDrag(document.getElementById('activeList'));
   setupPinDrag(document.getElementById('spareList'));
   setupScheduleDrag();
-
-  // Add Schedule
-  document.getElementById('addScheduleBtn').addEventListener('click', ()=>{
-    const pin = parseInt(document.getElementById('newSchedPin').value,10);
-    const onVal = document.getElementById('newSchedOn').value.trim();
-    const offVal= document.getElementById('newSchedOff').value.trim();
-    const days = [...document.querySelectorAll('#newSchedDays input[type=checkbox]')].filter(cb=>cb.checked).map(cb=>parseInt(cb.value,10));
-    if(!/^\d{1,2}:\d{2}$/.test(onVal) || !/^\d{1,2}:\d{2}$/.test(offVal)) return alert('Times must be HH:MM');
-    if(days.length===0) return alert('Select at least one day');
-    fetch('/api/schedule', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({pin:pin,on:onVal,off:offVal,days:days})})
-      .then(r=>r.ok?fetchStatus():r.text().then(t=>alert(t)));
-  });
+  setupDayDropdown();
 
   document.getElementById('addActiveBtn').addEventListener('click', ()=>{
-    const onVal = document.getElementById('newSchedOn').value.trim();
-    const durVal = document.getElementById('newSchedDur').value.trim();
-    const days = [...document.querySelectorAll('#newSchedDays input[type=checkbox]')].filter(cb=>cb.checked).map(cb=>parseInt(cb.value,10));
-    const onM = parseHHMM(onVal);
+    const startVal = document.getElementById('seqStart').value.trim();
+    const durVal = document.getElementById('seqDur').value.trim();
+    const onM = parseHHMM(startVal);
     const durM = parseHHMM(durVal);
+    const days = getSelectedDays();
     if(onM==null || durM==null) return alert('Times must be HH:MM');
     if(days.length===0) return alert('Select at least one day');
     const off = toHHMM((onM + durM) % (24 * 60));
     const on = toHHMM(onM);
     const pins = [...document.querySelectorAll('#activeList .pin-row')].map(r=>parseInt(r.dataset.pin,10));
-    Promise.all(pins.map(pin => fetch('/api/schedule', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({pin,on,off,days})})))
-      .then(fetchStatus);
+    Promise.all(pins.map(pin => fetch('/api/schedule', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({pin,on,off,days})}))).then(fetchStatus);
   });
 
-  // Sequence schedules
-  document.getElementById('runSeqBtn').addEventListener('click', sequenceSchedules);
+  document.getElementById('changeSeqBtn').addEventListener('click', sequenceSchedules);
   document.getElementById('disableAllSchedules')?.addEventListener('click', ()=>{
     fetch('/api/status').then(r=>r.json()).then(data=>{
       Promise.all(data.schedules.map(s=> fetch(`/api/schedule/${s.id}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:false})}) )).then(fetchStatus);
     });
   });
-document.getElementById('deleteAllSchedules')?.addEventListener('click', ()=>{
+  document.getElementById('deleteAllSchedules')?.addEventListener('click', ()=>{
     if(!confirm('Delete all schedules?')) return;
     fetch('/api/status').then(r=>r.json()).then(data=>{
       Promise.all(data.schedules.map(s=> fetch(`/api/schedule/${s.id}`,{method:'DELETE'}) )).then(fetchStatus);
     });
   });
 
-  // Rain controls
+  document.getElementById('settingsBtn').addEventListener('click', ()=>{
+    document.getElementById('settingsCard').classList.toggle('open');
+  });
+  document.getElementById('saveSettings').addEventListener('click', ()=>{
+    const m = parseInt(document.getElementById('defManualMins').value,10);
+    if(!Number.isFinite(m) || m<=0) return alert('Enter minutes > 0');
+    fetch('/api/settings',{method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({default_manual_seconds:m*60})}).then(fetchStatus);
+  });
+
   document.getElementById('rainSave').addEventListener('click', ()=>{
     const payload = {
       enabled: document.getElementById('rainEnabled').checked,
@@ -1450,7 +1455,6 @@ document.getElementById('deleteAllSchedules')?.addEventListener('click', ()=>{
   });
   document.getElementById('rainRefresh').addEventListener('click', ()=> fetch('/api/rain').then(r=>r.json()).then(updateRain));
 
-  // Kick off
   fetchStatus();
   setInterval(fetchStatus, 60000);
 });
@@ -1569,6 +1573,7 @@ document.getElementById('deleteAllSchedules')?.addEventListener('click', ()=>{
                 "pins_spares": spares_sorted,      # spares only
                 "schedules": sch_view,
                 "automation_enabled": bool(cfg.get("automation_enabled", True)),
+                "default_manual_seconds": int(cfg.get("default_manual_seconds", 600)),
                 "ntp": cfg.get("ntp", {}),
                 "now": server_time_str,            # legacy
                 "server_time": server_time_str,    # legacy
@@ -1611,6 +1616,16 @@ document.getElementById('deleteAllSchedules')?.addEventListener('click', ()=>{
             pmeta["name"] = new_name
             save_config(cfg)
         return jsonify({"pin": pin, "name": new_name})
+
+    @app.post("/api/settings")
+    def api_settings():
+        data = request.get_json(force=True) or {}
+        secs = data.get("default_manual_seconds")
+        if isinstance(secs, (int, float)) and secs > 0:
+            with LOCK:
+                cfg["default_manual_seconds"] = int(secs)
+                save_config(cfg)
+        return "OK"
 
     @app.post("/api/pins/reorder")
     def api_pins_reorder():
