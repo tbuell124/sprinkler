@@ -1403,61 +1403,66 @@ function setupDayDropdown(){
     sum.textContent = 'Enabled: ' + (en && en.checked ? 'Yes' : 'No') + ' • Threshold: ' + (th ? th.value : thr) + '%';
   }
 }
-document.addEventListener('DOMContentLoaded', ()=>{
-  setupPinDrag(document.getElementById('activeList'));
-  setupPinDrag(document.getElementById('spareList'));
-  setupScheduleDrag();
-  setupDayDropdown();
+  function init(){
+    setupPinDrag(document.getElementById('activeList'));
+    setupPinDrag(document.getElementById('spareList'));
+    setupScheduleDrag();
+    setupDayDropdown();
 
-  document.getElementById('addActiveBtn').addEventListener('click', ()=>{
-    const startVal = document.getElementById('seqStart').value.trim();
-    const durVal = document.getElementById('seqDur').value.trim();
-    const onM = parseHHMM(startVal);
-    const durM = parseHHMM(durVal);
-    const days = getSelectedDays();
-    if(onM==null || durM==null) return alert('Times must be HH:MM');
-    if(days.length===0) return alert('Select at least one day');
-    const off = toHHMM((onM + durM) % (24 * 60));
-    const on = toHHMM(onM);
-    const pins = [...document.querySelectorAll('#activeList .pin-row')].map(r=>parseInt(r.dataset.pin,10));
-    Promise.all(pins.map(pin => fetch('/api/schedule', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({pin,on,off,days})}))).then(fetchStatus);
-  });
-
-  document.getElementById('changeSeqBtn').addEventListener('click', sequenceSchedules);
-  document.getElementById('disableAllSchedules')?.addEventListener('click', ()=>{
-    fetch('/api/status').then(r=>r.json()).then(data=>{
-      Promise.all(data.schedules.map(s=> fetch(`/api/schedule/${s.id}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:false})}) )).then(fetchStatus);
+    document.getElementById('addActiveBtn').addEventListener('click', ()=>{
+      const startVal = document.getElementById('seqStart').value.trim();
+      const durVal = document.getElementById('seqDur').value.trim();
+      const onM = parseHHMM(startVal);
+      const durM = parseHHMM(durVal);
+      const days = getSelectedDays();
+      if(onM==null || durM==null) return alert('Times must be HH:MM');
+      if(days.length===0) return alert('Select at least one day');
+      const off = toHHMM((onM + durM) % (24 * 60));
+      const on = toHHMM(onM);
+      const pins = [...document.querySelectorAll('#activeList .pin-row')].map(r=>parseInt(r.dataset.pin,10));
+      Promise.all(pins.map(pin => fetch('/api/schedule', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({pin,on,off,days})}))).then(fetchStatus);
     });
-  });
-  document.getElementById('deleteAllSchedules')?.addEventListener('click', ()=>{
-    if(!confirm('Delete all schedules?')) return;
-    fetch('/api/status').then(r=>r.json()).then(data=>{
-      Promise.all(data.schedules.map(s=> fetch(`/api/schedule/${s.id}`,{method:'DELETE'}) )).then(fetchStatus);
+
+    document.getElementById('changeSeqBtn').addEventListener('click', sequenceSchedules);
+    document.getElementById('disableAllSchedules')?.addEventListener('click', ()=>{
+      fetch('/api/status').then(r=>r.json()).then(data=>{
+        Promise.all(data.schedules.map(s=> fetch(`/api/schedule/${s.id}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:false})}) )).then(fetchStatus);
+      });
     });
-  });
+    document.getElementById('deleteAllSchedules')?.addEventListener('click', ()=>{
+      if(!confirm('Delete all schedules?')) return;
+      fetch('/api/status').then(r=>r.json()).then(data=>{
+        Promise.all(data.schedules.map(s=> fetch(`/api/schedule/${s.id}`,{method:'DELETE'}) )).then(fetchStatus);
+      });
+    });
 
-  document.getElementById('settingsBtn').addEventListener('click', ()=>{
-    document.getElementById('settingsCard').classList.toggle('open');
-  });
-  document.getElementById('saveSettings').addEventListener('click', ()=>{
-    const m = parseInt(document.getElementById('defManualMins').value,10);
-    if(!Number.isFinite(m) || m<=0) return alert('Enter minutes > 0');
-    fetch('/api/settings',{method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({default_manual_seconds:m*60})}).then(fetchStatus);
-  });
+    document.getElementById('settingsBtn').addEventListener('click', ()=>{
+      document.getElementById('settingsCard').classList.toggle('open');
+    });
+    document.getElementById('saveSettings').addEventListener('click', ()=>{
+      const m = parseInt(document.getElementById('defManualMins').value,10);
+      if(!Number.isFinite(m) || m<=0) return alert('Enter minutes > 0');
+      fetch('/api/settings',{method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({default_manual_seconds:m*60})}).then(fetchStatus);
+    });
 
-  document.getElementById('rainSave').addEventListener('click', ()=>{
-    const payload = {
-      enabled: document.getElementById('rainEnabled').checked,
-      threshold: parseInt(document.getElementById('rainThreshold').value,10)
-    };
-    fetch('/api/rain', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)})
-      .then(()=> fetch('/api/rain').then(r=>r.json()).then(updateRain));
-  });
-  document.getElementById('rainRefresh').addEventListener('click', ()=> fetch('/api/rain').then(r=>r.json()).then(updateRain));
+    document.getElementById('rainSave').addEventListener('click', ()=>{
+      const payload = {
+        enabled: document.getElementById('rainEnabled').checked,
+        threshold: parseInt(document.getElementById('rainThreshold').value,10)
+      };
+      fetch('/api/rain', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)})
+        .then(()=> fetch('/api/rain').then(r=>r.json()).then(updateRain));
+    });
+    document.getElementById('rainRefresh').addEventListener('click', ()=> fetch('/api/rain').then(r=>r.json()).then(updateRain));
 
-  fetchStatus();
-  setInterval(fetchStatus, 60000);
-});
+    fetchStatus();
+    setInterval(fetchStatus, 60000);
+  }
+  if(document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', init);
+  }else{
+    init();
+  }
 </script>
 </body>
 </html>
