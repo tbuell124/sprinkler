@@ -1437,7 +1437,10 @@ function setupDayDropdown(){
     });
 
     document.getElementById('settingsBtn').addEventListener('click', ()=>{
-      document.getElementById('settingsCard').classList.toggle('open');
+      const card = document.getElementById('settingsCard');
+      const willOpen = !card.classList.contains('open');
+      card.classList.toggle('open');
+      if(willOpen){ card.scrollIntoView({behavior:'smooth', block:'start'}); }
     });
     document.getElementById('saveSettings').addEventListener('click', ()=>{
       const m = parseInt(document.getElementById('defManualMins').value,10);
