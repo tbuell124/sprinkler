@@ -1377,7 +1377,7 @@ function sequenceSchedules(){
     sum.textContent = 'Enabled: ' + (en && en.checked ? 'Yes' : 'No') + ' • Threshold: ' + (th ? th.value : thr) + '%';
   }
 }
-document.addEventListener('DOMContentLoaded', ()=>{
+function init(){
   // Theme toggle
   const themeBtn = document.getElementById('themeToggle');
   if(themeBtn){
@@ -1453,7 +1453,13 @@ document.getElementById('deleteAllSchedules')?.addEventListener('click', ()=>{
   // Kick off
   fetchStatus();
   setInterval(fetchStatus, 60000);
-});
+}
+
+if(document.readyState === 'loading'){
+  document.addEventListener('DOMContentLoaded', init);
+} else {
+  init();
+}
 </script>
 </body>
 </html>
