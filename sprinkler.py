@@ -280,6 +280,7 @@ DEFAULT_CONFIG = {
     # days (list of weekday numbers) and enabled.
     "schedules": [],
     "automation_enabled": True,
+    "system_enabled": True,
     # NTP options for timedatectl integration.  Enabled controls
     # whether NTP is active; server selects the pool or host for
     # synchronisation.
@@ -308,6 +309,7 @@ DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 class PinManager:
     """Wraps gpiozero DigitalOutputDevice for each configured pin."""
     def __init__(self, config: dict):
+        self.cfg = config
         self.devices: Dict[int, DigitalOutputDevice] = {}
         self.pending_timers: Dict[int, threading.Timer] = {}
         self._build_from_config(config)
@@ -340,6 +342,8 @@ class PinManager:
     def on(self, pin: int, seconds: int = None):
         """Activate a pin and optionally schedule it to turn off."""
         with LOCK:
+            if not self.cfg.get("system_enabled", True):
+                return
             dev = self.devices[int(pin)]
             # Cancel any existing timer for this pin before activating it.
             # Otherwise a previously scheduled callback could turn the pin
@@ -511,8 +515,8 @@ class SprinklerScheduler:
                 current_time = now.strftime("%H:%M")
                 # Acquire lock to safely read config and state
                 with LOCK:
-                    # Skip all events when automation is disabled
-                    if not self.cfg.get("automation_enabled", True):
+                    # Skip all events when automation or system is disabled
+                    if not self.cfg.get("automation_enabled", True) or not self.cfg.get("system_enabled", True):
                         pass
                     else:
                         for entry in self.cfg.get("schedules", []):
@@ -566,6 +570,8 @@ class SprinklerScheduler:
 
     def _maybe_on(self, pin: int):
         """Called by scheduled ON jobs; respects rain delay."""
+        if not self.cfg.get("system_enabled", True):
+            return
         try:
             if self.rain and self.rain.should_delay():
                 # Skip watering due to rain delay; log to stdout for
@@ -606,7 +612,7 @@ class SprinklerScheduler:
                     job.remove()
                 except Exception:
                     pass
-        if not self.cfg.get("automation_enabled", True):
+        if not self.cfg.get("automation_enabled", True) or not self.cfg.get("system_enabled", True):
             return
         for entry in self.cfg.get("schedules", []):
             if not entry.get("enabled", True):
@@ -840,6 +846,8 @@ body{font-family:system-ui, -apple-system, Segoe UI, Roboto, sans-serif; backgro
 header{position:sticky; top:0; background:var(--card); padding:10px 16px; display:flex; flex-wrap:wrap; gap:12px 16px; align-items:center; border-bottom:1px solid var(--border); z-index:10}
 header .status{font-size:.9rem}
 header a{color:var(--text); text-decoration:none}
+.logo{font-size:1.2rem; font-weight:600; color:var(--accent); margin-right:auto}
+.master-toggle{display:flex; align-items:center; gap:6px; font-size:.9rem}
 .badge{padding:4px 8px; border-radius:8px; font-size:.8rem; display:inline-block}
 .badge.rain-active{background:var(--red); color:#fff}
 .badge.rain-inactive{background:var(--green); color:#000}
@@ -905,8 +913,13 @@ input[type="number"]{width:90px}
 </head>
 <body>
   <header>
+    <h1 class="logo">Sprinkler</h1>
     <div class="status" id="timeBar"></div>
     <div class="status" id="automationBar"></div>
+    <div class="master-toggle">
+      <span>Master</span>
+      <label class="switch"><input type="checkbox" id="masterToggle"><span class="slider"></span></label>
+    </div>
     <a href="/pin-settings" class="btn primary">Pin Settings</a>
     <span class="badge" id="rainBadge">Rain Delay</span>
   </header>
@@ -1044,7 +1057,7 @@ function toHHMM(total){
 function fetchStatus(){
   fetch('/api/status').then(r=>r.json()).then(data=>{
     updateHeader(data);
-    renderPins(data.pins_slots, data.automation_enabled);
+    renderPins(data.pins_slots, data.automation_enabled, data.system_enabled);
     updateSchedules(data.schedules);
     hydratePinSelect(data.pins);
   });
@@ -1059,13 +1072,14 @@ function updateHeader(data){
     'Pi Time: ' + server.toLocaleString() + ' (drift ' + (drift>=0?'+':'') + drift + 's)';
   document.getElementById('automationBar').textContent =
     data.automation_enabled ? 'Automation: ENABLED' : 'Automation: DISABLED';
+  document.getElementById('masterToggle').checked = !!data.system_enabled;
 }
 /* ========= Pins ========= */
-function renderPins(slots, automationEnabled){
+function renderPins(slots, automationEnabled, systemEnabled){
   const activeList = document.getElementById('activeList');
   activeList.innerHTML='';
 
-  slots.forEach(p => activeList.appendChild(makePinRow(p, automationEnabled)));
+  slots.forEach(p => activeList.appendChild(makePinRow(p, automationEnabled, systemEnabled)));
 
   document.getElementById('activeSummary').textContent =
   slots.length + ' slot' + (slots.length!==1 ? 's' : '');
@@ -1078,24 +1092,23 @@ if(running>1){
 }else{
   warn.style.display='none';
 }
-function makePinRow(p, automationEnabled){
+function makePinRow(p, automationEnabled, systemEnabled){
   const row = document.createElement('div'); row.className='pin-row'; row.draggable=true; row.dataset.pin = p.pin;
 
   const dot = document.createElement('span'); dot.className='dot'+(p.is_active?' on':''); row.appendChild(dot);
   var name = document.createElement('span'); name.className='pin-name'; name.textContent = p.name || ('Pin ' + p.pin); row.appendChild(name);
 
   const sw = document.createElement('label'); sw.className='switch';
-  const sb = document.createElement('input'); sb.type='checkbox'; sb.checked=!!p.is_active; sb.disabled=!automationEnabled;
+  const sb = document.createElement('input'); sb.type='checkbox'; sb.checked=!!p.is_active; sb.disabled=!(automationEnabled && systemEnabled);
   sb.addEventListener('change', function(){
   fetch('/api/pin/' + p.pin + '/' + (sb.checked ? 'on' : 'off'), {method:'POST'});
 });
   const slider = document.createElement('span'); slider.className='slider';
   sw.appendChild(sb); sw.appendChild(slider); row.appendChild(sw);
 
-  const mins = document.createElement('input'); mins.type='text'; mins.value='10'; mins.className='mins'; mins.title='Minutes';
-  row.appendChild(mins);
+  const mins = document.createElement('input'); mins.type='text'; mins.value='10'; mins.className='mins'; mins.title='Minutes'; mins.disabled=!systemEnabled; row.appendChild(mins);
 
-  const run = document.createElement('button'); run.className='btn primary'; run.textContent='RUN';
+  const run = document.createElement('button'); run.className='btn primary'; run.textContent='RUN'; run.disabled=!systemEnabled;
   run.addEventListener('click', ()=>{
     const m = parseInt(mins.value,10); if(!Number.isFinite(m)||m<=0) return alert('Enter minutes > 0');
     var secs = m*60;
@@ -1103,7 +1116,7 @@ fetch('/api/pin/' + p.pin + '/on?seconds=' + secs, {method:'POST'}).then(functio
   });
   row.appendChild(run);
 
-  const stop = document.createElement('button'); stop.className='btn'; stop.textContent='STOP';
+  const stop = document.createElement('button'); stop.className='btn'; stop.textContent='STOP'; stop.disabled=!systemEnabled;
   stop.addEventListener('click', ()=>{
     fetch(`/api/pin/${p.pin}/off`, {method:'POST'}).then(()=> stopCountdown(p.pin));
     stopCountdown(p.pin);
@@ -1414,6 +1427,11 @@ function init(){
   setupPinDrag(document.getElementById('activeList'));
   setupScheduleDrag();
 
+  document.getElementById('masterToggle').addEventListener('change', function(){
+    fetch('/api/system', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({enabled:this.checked})})
+      .then(fetchStatus);
+  });
+
   // Add Schedule
   document.getElementById('addScheduleBtn').addEventListener('click', ()=>{
     const pin = parseInt(document.getElementById('newSchedPin').value,10);
@@ -1599,6 +1617,7 @@ if(document.readyState === 'loading'){
                 "pins_spares": spares_sorted,      # spares only
                 "schedules": sch_view,
                 "automation_enabled": bool(cfg.get("automation_enabled", True)),
+                "system_enabled": bool(cfg.get("system_enabled", True)),
                 "ntp": cfg.get("ntp", {}),
                 "now": server_time_str,            # legacy
                 "server_time": server_time_str,    # legacy
@@ -1613,6 +1632,8 @@ if(document.readyState === 'loading'){
 
     @app.post("/api/pin/<int:pin>/on")
     def api_pin_on(pin: int):
+        if not cfg.get("system_enabled", True):
+            return ("System disabled", 403)
         seconds = request.args.get("seconds", default=None, type=int)
         pinman.on(pin, seconds)
         return "OK"
@@ -1621,6 +1642,21 @@ if(document.readyState === 'loading'){
     def api_pin_off(pin: int):
         pinman.off(pin)
         return "OK"
+
+    @app.post("/api/system")
+    def api_system_toggle():
+        data = request.get_json(force=True) or {}
+        enabled = bool(data.get("enabled", True))
+        with LOCK:
+            cfg["system_enabled"] = enabled
+            save_config(cfg)
+            if not enabled:
+                for p in list(pinman.devices.keys()):
+                    try:
+                        pinman.off(p)
+                    except Exception:
+                        pass
+        return jsonify({"system_enabled": enabled})
 
     @app.post("/api/pin/<int:pin>/name")
     def api_pin_rename(pin: int):
