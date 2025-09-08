@@ -34,4 +34,18 @@ def test_settings_lists_pins():
     assert resp.status_code == 200
     body = resp.data.decode()
     assert "Pin Names" in body
+    # The settings page loads pins dynamically; verify the API supplies
+    # each GPIO with its configured name so the page can render them.
+    status = client.get('/api/status').get_json()
+    assert any(p["pin"] == 5 and p["name"] == "Front" for p in status["pins"])
+    assert any(p["pin"] == 6 and p["name"] == "Back" for p in status["pins"])
+
+
+def test_dashboard_hides_gpio_numbers():
+    app, _ = build_app()
+    client = app.test_client()
+    resp = client.get('/')
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert 'GPIO' not in body
 
