@@ -806,11 +806,9 @@ main{padding:16px; display:flex; flex-direction:column; gap:16px}
 }
 .pin-row .dot{width:8px; height:8px; border-radius:50%; background:var(--muted)}
 .pin-row .dot.on{background:var(--green)}
-.pin-row .gpio{font:600 12px ui-monospace, Menlo, monospace; color:#93a4b5}
-.pin-row input.pin-name{
+.pin-row .pin-name{
   min-width:140px; flex:1; background:transparent; border:none; color:var(--green); font-weight:600
 }
-.pin-row input.pin-name:focus{outline:1px solid var(--green); border-radius:6px; padding:2px 4px}
 .pin-row .mins{width:64px; background:transparent; border:1px solid var(--border); border-radius:6px; padding:4px 6px; color:var(--text); font-size:.9rem; text-align:center}
 button.btn{padding:6px 10px; font-size:.85rem; border:0; border-radius:8px; cursor:pointer; background:var(--border); color:var(--text)}
 button.primary{background:var(--green); color:#000}
@@ -850,6 +848,7 @@ input[type="number"]{width:90px}
   <div class="status" id="timeBar"></div>
   <div class="status" id="automationBar"></div>
   <span class="badge" id="rainBadge">Rain Delay</span>
+  <a href="/settings" class="btn">Settings</a>
   <button class="btn" id="themeToggle" style="margin-left:auto">Light Mode</button>
 </header>
 
@@ -1042,13 +1041,7 @@ function makePinRow(p, automationEnabled){
   const row = document.createElement('div'); row.className='pin-row'; row.draggable=true; row.dataset.pin = p.pin;
 
   const dot = document.createElement('span'); dot.className='dot'+(p.is_active?' on':''); row.appendChild(dot);
-  var gpio = document.createElement('span'); gpio.className='gpio'; gpio.textContent='GPIO ' + p.pin; row.appendChild(gpio);
-
-var name = document.createElement('input'); name.className='pin-name'; name.value = p.name || ('GPIO ' + p.pin);
-name.addEventListener('change', function(){
-  var newName = name.value.trim();
-  fetch('/api/pin/' + p.pin + '/name', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name:newName})});
-});
+  var name = document.createElement('span'); name.className='pin-name'; name.textContent = p.name || 'Unnamed';
   row.appendChild(name);
 
   const sw = document.createElement('label'); sw.className='switch';
@@ -1296,7 +1289,7 @@ function hydratePinSelect(_){
     [...data.pins_slots, ...data.pins_spares].forEach(p=>{
       var o=document.createElement('option');
 o.value = p.pin;
-o.textContent = 'GPIO ' + p.pin + ' — ' + (p.name || ('GPIO ' + p.pin));
+o.textContent = p.name || 'Unnamed';
 sel.appendChild(o);
     });
   });
@@ -1465,9 +1458,56 @@ if(document.readyState === 'loading'){
 </html>
 """
 
+    SETTINGS_HTML = """<!doctype html>
+<html lang=\"en\">
+<head>
+<meta charset=\"utf-8\">
+<title>Sprinkler Settings</title>
+<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
+<style>
+body{font-family:system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:var(--bg,#0b0f14); color:var(--text,#e6edf3); margin:0; padding:16px;}
+a{color:var(--accent,#3399ff); text-decoration:none; display:inline-block; margin-bottom:16px;}
+ul{list-style:none; padding:0;}
+li{margin:8px 0;}
+label{display:flex; align-items:center; gap:8px;}
+input{flex:1; padding:4px; border:1px solid #ccc; border-radius:4px;}
+</style>
+</head>
+<body>
+<a href=\"/\">\u2190 Back</a>
+<h1>Pin Names</h1>
+<ul id=\"pinList\"></ul>
+<script>
+function loadPins(){
+  fetch('/api/status').then(r=>r.json()).then(data=>{
+    const list=document.getElementById('pinList'); list.innerHTML='';
+    data.pins.forEach(p=>{
+      const li=document.createElement('li');
+      li.innerHTML='GPIO '+p.pin+': <input data-pin=\"'+p.pin+'\" value=\"'+(p.name||'')+'\">';
+      list.appendChild(li);
+    });
+  });
+}
+document.addEventListener('change', e=>{
+  if(e.target.matches('input[data-pin]')){
+    const pin=e.target.getAttribute('data-pin');
+    const name=e.target.value.trim();
+    fetch('/api/pin/'+pin+'/name',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
+  }
+});
+loadPins();
+</script>
+</body>
+</html>
+"""
+
     @app.get("/")
     def index():
         return Response(HTML, mimetype="text/html")
+
+    @app.get("/settings")
+    def settings_page():
+        return Response(SETTINGS_HTML, mimetype="text/html")
 
 
     def _split_and_sort_pins_for_view(cfg, pinman):
@@ -1475,7 +1515,7 @@ if(document.readyState === 'loading'){
         slots, spares = [], []
         for pin_str, meta in cfg["pins"].items():
             pin = int(pin_str)
-            name = meta.get("name", f"Pin {pin}")
+            name = meta.get("name") or "Unnamed"
             is_active = pinman.get_state(pin)
             item = {
                 "pin": pin,
@@ -1552,7 +1592,7 @@ if(document.readyState === 'loading'){
                 sch_view.append({
                     "id": s["id"],
                     "pin": int(s["pin"]),
-                    "pin_name": cfg["pins"].get(str(s["pin"]), {}).get("name", f"Pin {s['pin']}"),
+                    "pin_name": cfg["pins"].get(str(s["pin"]), {}).get("name") or "Unnamed",
                     "on": s["on"],
                     "off": s["off"],
                     "day_names": [DAY_NAMES[d] for d in s.get("days", [])],
