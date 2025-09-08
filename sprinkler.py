@@ -907,7 +907,7 @@ input[type="number"]{width:90px}
   <header>
     <div class="status" id="timeBar"></div>
     <div class="status" id="automationBar"></div>
-    <a href="/settings" class="btn primary">Settings</a>
+    <a href="/pin-settings" class="btn primary">Pin Settings</a>
     <span class="badge" id="rainBadge">Rain Delay</span>
   </header>
 
@@ -1483,10 +1483,14 @@ if(document.readyState === 'loading'){
 
     @app.get("/")
     def index():
-        return Response(HTML, mimetype="text/html")
+        return Response("<p>See <a href='/settings'>settings</a></p>", mimetype="text/html")
 
     @app.get("/settings")
     def settings_page():
+        return Response(HTML, mimetype="text/html")
+
+    @app.get("/pin-settings")
+    def pin_settings_page():
         return Response(SETTINGS_HTML, mimetype="text/html")
 
 
