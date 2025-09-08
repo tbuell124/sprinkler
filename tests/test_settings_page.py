@@ -24,11 +24,19 @@ def build_app():
     return app
 
 
-def test_settings_lists_pins():
+def test_settings_serves_main_ui():
     app = build_app()
     client = app.test_client()
     resp = client.get('/settings')
     assert resp.status_code == 200
     text = resp.data.decode()
-    assert 'GPIO 5' in text
-    assert 'Slot 1' in text
+    assert 'Sprinkler Controller' in text
+
+
+def test_pin_settings_lists_pins():
+    app = build_app()
+    client = app.test_client()
+    resp = client.get('/pin-settings')
+    assert resp.status_code == 200
+    text = resp.data.decode()
+    assert 'Pin Settings' in text
