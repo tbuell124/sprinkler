@@ -771,9 +771,6 @@ def build_app(cfg: dict, pinman: PinManager, sched: SprinklerScheduler, rain: Ra
 :root{
   --bg:#0b0f14; --card:#10161d; --border:#1e2936; --text:#e6edf3; --muted:#9fb1c1; --green:#2ecc71; --red:#e74c3c; --accent:#3399ff;
 }
-body.light{
-  --bg:#f6f8fa; --card:#ffffff; --border:#d0d7de; --text:#24292f; --muted:#57606a; --green:#2ecc71; --red:#e74c3c; --accent:#0969da;
-}
 *{box-sizing:border-box}
 body{font-family:system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:var(--bg); color:var(--text); margin:0}
 header{position:sticky; top:0; background:var(--card); padding:10px 16px; display:flex; flex-wrap:wrap; gap:12px 16px; align-items:center; border-bottom:1px solid var(--border); z-index:10}
@@ -846,12 +843,11 @@ input[type="number"]{width:90px}
 </style>
 </head>
 <body>
-<header>
-  <div class="status" id="timeBar"></div>
-  <div class="status" id="automationBar"></div>
-  <span class="badge" id="rainBadge">Rain Delay</span>
-  <button class="btn" id="themeToggle" style="margin-left:auto">Light Mode</button>
-</header>
+  <header>
+    <div class="status" id="timeBar"></div>
+    <div class="status" id="automationBar"></div>
+    <span class="badge" id="rainBadge">Rain Delay</span>
+  </header>
 
 <main>
 
@@ -1378,22 +1374,6 @@ function sequenceSchedules(){
   }
 }
 function init(){
-  // Theme toggle
-  const themeBtn = document.getElementById('themeToggle');
-  if(themeBtn){
-    const applyTheme = (th)=>{
-      document.body.classList.toggle('light', th === 'light');
-      themeBtn.textContent = th === 'light' ? 'Dark Mode' : 'Light Mode';
-    };
-    const initial = localStorage.getItem('theme') === 'light' ? 'light' : 'dark';
-    applyTheme(initial);
-    themeBtn.addEventListener('click', ()=>{
-      const next = document.body.classList.contains('light') ? 'dark' : 'light';
-      localStorage.setItem('theme', next);
-      applyTheme(next);
-    });
-  }
-
   setupPinDrag(document.getElementById('activeList'));
   setupPinDrag(document.getElementById('spareList'));
   setupScheduleDrag();
