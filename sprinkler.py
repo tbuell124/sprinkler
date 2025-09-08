@@ -182,31 +182,56 @@ SETTINGS_HTML = """<!doctype html>
 <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
 <style>
 body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#0b0f14;color:#e6edf3;padding:16px}
-label{display:block;margin-bottom:8px}
-input{background:transparent;color:#e6edf3;border:1px solid #1e2936;border-radius:6px;padding:4px 6px;margin-left:8px}
 a{color:#9fb1c1}
+.list{display:flex;flex-direction:column;gap:8px}
+.pin-row{display:flex;align-items:center;gap:10px;background:#10161d;border:1px solid #1e2936;border-radius:8px;padding:8px}
+.pin-row span{min-width:80px}
+.pin-row input{flex:1;background:transparent;color:#e6edf3;border:1px solid #1e2936;border-radius:6px;padding:4px 6px}
+.cols{display:flex;gap:24px;flex-wrap:wrap}
+.col{flex:1;min-width:200px}
 </style>
 </head>
 <body>
 <h1>Pin Settings</h1>
-<div id=\"pins\"></div>
+<div class=\"cols\">
+  <div class=\"col\">
+    <h2>Active</h2>
+    <div id=\"activeList\" class=\"list\"></div>
+  </div>
+  <div class=\"col\">
+    <h2>Inactive</h2>
+    <div id=\"inactiveList\" class=\"list\"></div>
+  </div>
+</div>
 <p><a href=\"/\">Back</a></p>
 <script>
+let dragEl;
+function makeRow(p){
+  const row=document.createElement('div'); row.className='pin-row'; row.draggable=true; row.dataset.pin=p.pin;
+  const label=document.createElement('span'); label.textContent='GPIO '+p.pin; row.appendChild(label);
+  const input=document.createElement('input'); input.value=p.name || ('Pin '+p.pin);
+  input.addEventListener('change',()=>{ const name=input.value.trim(); fetch('/api/pin/'+p.pin+'/name',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})}); });
+  row.appendChild(input);
+  return row;
+}
+function sendPinOrder(){
+  const active=[...document.querySelectorAll('#activeList .pin-row')].map(r=>parseInt(r.dataset.pin,10));
+  const spare=[...document.querySelectorAll('#inactiveList .pin-row')].map(r=>parseInt(r.dataset.pin,10));
+  fetch('/api/pins/reorder',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({active,spare})});
+}
+function setupDrag(list){
+  list.addEventListener('dragstart',e=>{ dragEl=e.target.closest('.pin-row'); e.dataTransfer.effectAllowed='move'; });
+  list.addEventListener('dragover',e=>{ e.preventDefault(); const target=e.target.closest('.pin-row'); if(!target){ list.appendChild(dragEl); return;} if(target===dragEl) return; const rect=target.getBoundingClientRect(); const next=(e.clientY-rect.top)/(rect.bottom-rect.top)>0.5; target.parentElement.insertBefore(dragEl,next?target.nextSibling:target); });
+  list.addEventListener('drop',e=>{ e.preventDefault(); sendPinOrder(); });
+}
 fetch('/api/status').then(r=>r.json()).then(data=>{
-  const container=document.getElementById('pins');
-  data.pins.forEach(p=>{
-    const label=document.createElement('label');
-    label.textContent='GPIO '+p.pin;
-    const input=document.createElement('input');
-    input.value=p.name || ('Pin '+p.pin);
-    input.addEventListener('change',()=>{
-      const name=input.value.trim();
-      fetch('/api/pin/'+p.pin+'/name',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
-    });
-    label.appendChild(input);
-    container.appendChild(label);
-  });
+  const active=document.getElementById('activeList');
+  const inactive=document.getElementById('inactiveList');
+  data.pins_slots.forEach(p=>active.appendChild(makeRow(p)));
+  data.pins_spares.forEach(p=>inactive.appendChild(makeRow(p)));
 });
+setupDrag(document.getElementById('activeList'));
+setupDrag(document.getElementById('inactiveList'));
 </script>
 </body>
 </html>
@@ -845,9 +870,9 @@ main{padding:16px; display:flex; flex-direction:column; gap:16px}
 .pin-row .dot.on{background:var(--green)}
 .pin-row .pin-name{min-width:140px; flex:1; color:var(--green); font-weight:600}
 .pin-row .mins{width:64px; background:transparent; border:1px solid var(--border); border-radius:6px; padding:4px 6px; color:var(--text); font-size:.9rem; text-align:center}
-button.btn{padding:6px 10px; font-size:.85rem; border:0; border-radius:8px; cursor:pointer; background:var(--border); color:var(--text)}
-button.primary{background:var(--green); color:#000}
-button.ghost{background:transparent; border:1px solid var(--border)}
+button.btn, a.btn{padding:6px 10px; font-size:.85rem; border:0; border-radius:8px; cursor:pointer; background:var(--border); color:var(--text); text-decoration:none; display:inline-block}
+button.primary, a.primary{background:var(--green); color:#000}
+button.ghost, a.ghost{background:transparent; border:1px solid var(--border)}
 .countdown{font-size:.8rem; color:var(--muted); margin-left:auto}
 
 /* switch */
@@ -882,7 +907,7 @@ input[type="number"]{width:90px}
   <header>
     <div class="status" id="timeBar"></div>
     <div class="status" id="automationBar"></div>
-    <a href="/settings" class="status">Settings</a>
+    <a href="/settings" class="btn primary">Settings</a>
     <span class="badge" id="rainBadge">Rain Delay</span>
   </header>
 
@@ -899,20 +924,6 @@ input[type="number"]{width:90px}
       <div class="section-pad">
         <div id="activeWarn" class="warning"></div>
         <div id="activeList" class="list"></div>
-      </div>
-    </div>
-  </section>
-
-  <!-- Spare Pins (collapsible) -->
-  <section class="card collap open" id="spareCard">
-    <div class="collap-head" data-target="spareBody">
-      <h2>Spare Pins</h2>
-      <div class="sub" id="spareSummary"></div>
-      <div class="chev">▶</div>
-    </div>
-    <div class="collap-body" id="spareBody">
-      <div class="section-pad">
-        <div id="spareList" class="list"></div>
       </div>
     </div>
   </section>
@@ -1033,7 +1044,7 @@ function toHHMM(total){
 function fetchStatus(){
   fetch('/api/status').then(r=>r.json()).then(data=>{
     updateHeader(data);
-    renderPinsGrouped(data.pins_slots, data.pins_spares, data.automation_enabled);
+    renderPins(data.pins_slots, data.automation_enabled);
     updateSchedules(data.schedules);
     hydratePinSelect(data.pins);
   });
@@ -1050,20 +1061,16 @@ function updateHeader(data){
     data.automation_enabled ? 'Automation: ENABLED' : 'Automation: DISABLED';
 }
 /* ========= Pins ========= */
-function renderPinsGrouped(slots, spares, automationEnabled){
+function renderPins(slots, automationEnabled){
   const activeList = document.getElementById('activeList');
-  const spareList  = document.getElementById('spareList');
-  activeList.innerHTML=''; spareList.innerHTML='';
+  activeList.innerHTML='';
 
   slots.forEach(p => activeList.appendChild(makePinRow(p, automationEnabled)));
-  spares.forEach(p => spareList.appendChild(makePinRow(p, automationEnabled)));
 
   document.getElementById('activeSummary').textContent =
   slots.length + ' slot' + (slots.length!==1 ? 's' : '');
-document.getElementById('spareSummary').textContent  =
-  spares.length + ' spare' + (spares.length!==1 ? 's' : '');
 
-var running = slots.concat(spares).filter(function(p){ return p.is_active; }).length;
+var running = slots.filter(function(p){ return p.is_active; }).length;
 var warn = document.getElementById('activeWarn');
 if(running>1){
   warn.style.display='block';
@@ -1405,7 +1412,6 @@ function sequenceSchedules(){
 }
 function init(){
   setupPinDrag(document.getElementById('activeList'));
-  setupPinDrag(document.getElementById('spareList'));
   setupScheduleDrag();
 
   // Add Schedule
