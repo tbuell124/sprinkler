@@ -846,6 +846,13 @@ header a{color:var(--text); text-decoration:none}
 
 main{padding:16px; display:flex; flex-direction:column; gap:16px}
 
+/* Tabs */
+.tabs{display:flex; gap:12px; margin-bottom:16px; border-bottom:1px solid var(--border)}
+.tab{background:none; border:0; padding:8px 12px; cursor:pointer; color:var(--text); font-size:.95rem}
+.tab.active{border-bottom:2px solid var(--green); color:var(--green)}
+.tab-panel{display:none}
+.tab-panel.active{display:block}
+
 /* Cards & collapsibles */
 .card{background:var(--card); border:1px solid var(--border); border-radius:12px; overflow:hidden}
 .collap-head{display:flex; align-items:center; gap:10px; padding:12px 14px; cursor:pointer; user-select:none; background:var(--bg)}
@@ -913,8 +920,14 @@ input[type="number"]{width:90px}
 
 <main>
 
-  <!-- Active Pins (collapsible) -->
-  <section class="card collap open" id="activeCard">
+  <nav class="tabs">
+    <button class="tab active" data-target="activeCard">Active</button>
+    <button class="tab" data-target="schedulesCard">Schedule</button>
+    <button class="tab" data-target="rainCard">Rain Delay</button>
+  </nav>
+
+  <!-- Active Pins -->
+  <section class="card collap open tab-panel active" id="activeCard">
     <div class="collap-head" data-target="activeBody">
       <h2>Active Pins</h2>
       <div class="sub" id="activeSummary"></div>
@@ -928,8 +941,8 @@ input[type="number"]{width:90px}
     </div>
   </section>
 
-  <!-- Schedules (collapsible) -->
-  <section class="card collap open" id="schedulesCard">
+  <!-- Schedules -->
+  <section class="card collap open tab-panel" id="schedulesCard">
     <div class="collap-head" data-target="schedulesBody">
       <h2>Schedules</h2>
       <div class="sub" id="schedSummary"></div>
@@ -977,8 +990,8 @@ input[type="number"]{width:90px}
     </div>
   </section>
 
-  <!-- Rain Delay (collapsible) -->
-  <section class="card collap" id="rainCard">
+  <!-- Rain Delay -->
+  <section class="card collap open tab-panel" id="rainCard">
     <div class="collap-head" data-target="rainBody">
       <h2>Rain Delay</h2>
       <div class="sub" id="rainSummary">Tap to expand</div>
@@ -1411,6 +1424,14 @@ function sequenceSchedules(){
   }
 }
 function init(){
+  document.querySelectorAll('.tab').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      document.querySelectorAll('.tab').forEach(b=>b.classList.remove('active'));
+      btn.classList.add('active');
+      document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
+      document.getElementById(btn.dataset.target).classList.add('active');
+    });
+  });
   setupPinDrag(document.getElementById('activeList'));
   setupScheduleDrag();
 
