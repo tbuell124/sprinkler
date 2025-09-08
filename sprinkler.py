@@ -173,6 +173,45 @@ CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.j
 # Re‑entrant lock used to guard shared state.
 LOCK = threading.RLock()
 
+# Simple settings page for editing pin names
+SETTINGS_HTML = """<!doctype html>
+<html lang=\"en\">
+<head>
+<meta charset=\"utf-8\">
+<title>Sprinkler Settings</title>
+<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
+<style>
+body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#0b0f14;color:#e6edf3;padding:16px}
+label{display:block;margin-bottom:8px}
+input{background:transparent;color:#e6edf3;border:1px solid #1e2936;border-radius:6px;padding:4px 6px;margin-left:8px}
+a{color:#9fb1c1}
+</style>
+</head>
+<body>
+<h1>Pin Settings</h1>
+<div id=\"pins\"></div>
+<p><a href=\"/\">Back</a></p>
+<script>
+fetch('/api/status').then(r=>r.json()).then(data=>{
+  const container=document.getElementById('pins');
+  data.pins.forEach(p=>{
+    const label=document.createElement('label');
+    label.textContent='GPIO '+p.pin;
+    const input=document.createElement('input');
+    input.value=p.name || ('Pin '+p.pin);
+    input.addEventListener('change',()=>{
+      const name=input.value.trim();
+      fetch('/api/pin/'+p.pin+'/name',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
+    });
+    label.appendChild(input);
+    container.appendChild(label);
+  });
+});
+</script>
+</body>
+</html>
+"""
+
 # ---------- Default Config ----------
 #
 # All pins are defined with BCM numbers.  Each entry can be customised
@@ -775,6 +814,7 @@ def build_app(cfg: dict, pinman: PinManager, sched: SprinklerScheduler, rain: Ra
 body{font-family:system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:var(--bg); color:var(--text); margin:0}
 header{position:sticky; top:0; background:var(--card); padding:10px 16px; display:flex; flex-wrap:wrap; gap:12px 16px; align-items:center; border-bottom:1px solid var(--border); z-index:10}
 header .status{font-size:.9rem}
+header a{color:var(--text); text-decoration:none}
 .badge{padding:4px 8px; border-radius:8px; font-size:.8rem; display:inline-block}
 .badge.rain-active{background:var(--red); color:#fff}
 .badge.rain-inactive{background:var(--green); color:#000}
@@ -803,11 +843,7 @@ main{padding:16px; display:flex; flex-direction:column; gap:16px}
 }
 .pin-row .dot{width:8px; height:8px; border-radius:50%; background:var(--muted)}
 .pin-row .dot.on{background:var(--green)}
-.pin-row .gpio{font:600 12px ui-monospace, Menlo, monospace; color:#93a4b5}
-.pin-row input.pin-name{
-  min-width:140px; flex:1; background:transparent; border:none; color:var(--green); font-weight:600
-}
-.pin-row input.pin-name:focus{outline:1px solid var(--green); border-radius:6px; padding:2px 4px}
+.pin-row .pin-name{min-width:140px; flex:1; color:var(--green); font-weight:600}
 .pin-row .mins{width:64px; background:transparent; border:1px solid var(--border); border-radius:6px; padding:4px 6px; color:var(--text); font-size:.9rem; text-align:center}
 button.btn{padding:6px 10px; font-size:.85rem; border:0; border-radius:8px; cursor:pointer; background:var(--border); color:var(--text)}
 button.primary{background:var(--green); color:#000}
@@ -846,6 +882,7 @@ input[type="number"]{width:90px}
   <header>
     <div class="status" id="timeBar"></div>
     <div class="status" id="automationBar"></div>
+    <a href="/settings" class="status">Settings</a>
     <span class="badge" id="rainBadge">Rain Delay</span>
   </header>
 
@@ -1038,14 +1075,7 @@ function makePinRow(p, automationEnabled){
   const row = document.createElement('div'); row.className='pin-row'; row.draggable=true; row.dataset.pin = p.pin;
 
   const dot = document.createElement('span'); dot.className='dot'+(p.is_active?' on':''); row.appendChild(dot);
-  var gpio = document.createElement('span'); gpio.className='gpio'; gpio.textContent='GPIO ' + p.pin; row.appendChild(gpio);
-
-var name = document.createElement('input'); name.className='pin-name'; name.value = p.name || ('GPIO ' + p.pin);
-name.addEventListener('change', function(){
-  var newName = name.value.trim();
-  fetch('/api/pin/' + p.pin + '/name', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name:newName})});
-});
-  row.appendChild(name);
+  var name = document.createElement('span'); name.className='pin-name'; name.textContent = p.name || ('Pin ' + p.pin); row.appendChild(name);
 
   const sw = document.createElement('label'); sw.className='switch';
   const sb = document.createElement('input'); sb.type='checkbox'; sb.checked=!!p.is_active; sb.disabled=!automationEnabled;
@@ -1448,6 +1478,10 @@ if(document.readyState === 'loading'){
     @app.get("/")
     def index():
         return Response(HTML, mimetype="text/html")
+
+    @app.get("/settings")
+    def settings_page():
+        return Response(SETTINGS_HTML, mimetype="text/html")
 
 
     def _split_and_sort_pins_for_view(cfg, pinman):
