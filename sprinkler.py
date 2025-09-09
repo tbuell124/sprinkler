@@ -2051,11 +2051,12 @@ presets are stored here too.  After editing, restart the controller
 or reapply the relevant preset.
 
 An alternate host can be supplied at runtime by setting the
-SPRINKLER_HOME environment variable.  For example:
+``SPRINKLER_DOMAIN`` environment variable.  For example:
 
-  export SPRINKLER_HOME=sprinkler.home
+  export SPRINKLER_DOMAIN=sprinkler.buell
 
-This overrides the host used when running `web` without editing the
+The legacy ``SPRINKLER_HOME`` variable is still honoured.  Either one
+overrides the host used when running ``web`` without editing the
 configuration file.
 
 """)
@@ -2075,7 +2076,9 @@ def main():
 
     # web command
     p_web = sub.add_parser("web", help="Run web UI and scheduler")
-    default_host = os.environ.get("SPRINKLER_HOME", cfg.get("web", {}).get("host", "0.0.0.0"))
+    default_host = os.environ.get("SPRINKLER_DOMAIN") or os.environ.get(
+        "SPRINKLER_HOME", cfg.get("web", {}).get("host", "0.0.0.0")
+    )
     p_web.add_argument("--host", default=default_host)
     p_web.add_argument("--port", type=int, default=int(cfg.get("web", {}).get("port", 8000)))
 
