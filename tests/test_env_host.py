@@ -1,12 +1,14 @@
 import sys
+import pytest
 import sprinkler
 
 
-def test_env_host_overrides_default(monkeypatch, tmp_path):
+@pytest.mark.parametrize("env_name", ["SPRINKLER_HOME", "SPRINKLER_DOMAIN"])
+def test_env_host_overrides_default(monkeypatch, tmp_path, env_name):
     # ensure config path is temp
     sprinkler.CONFIG_PATH = str(tmp_path / 'config.json')
     # environment variable specifying host
-    monkeypatch.setenv("SPRINKLER_HOME", "sprinkler.home")
+    monkeypatch.setenv(env_name, "sprinkler.buell")
 
     captured = {}
 
@@ -24,4 +26,4 @@ def test_env_host_overrides_default(monkeypatch, tmp_path):
     monkeypatch.setattr(sys, "argv", ["sprinkler.py", "web"])
     sprinkler.main()
 
-    assert captured['host'] == "sprinkler.home"
+    assert captured['host'] == "sprinkler.buell"
