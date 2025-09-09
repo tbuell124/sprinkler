@@ -135,7 +135,7 @@ except Exception:
 # Web (Flask)
 # =========================
 try:
-    from flask import Flask, jsonify, request, Response  # type: ignore
+    from flask import Flask, jsonify, request, Response, redirect  # type: ignore
 except Exception:
     # Provide minimal stubs when Flask is not installed.  The web
     # interface will not be available, but the CLI can still be used
@@ -157,6 +157,8 @@ except Exception:
             print("Flask app would run on", host, port)
     def jsonify(obj):
         return obj
+    def redirect(location, code=302):
+        return location
     # Simulate Flask request with args and get_json method
     class _Request:
         def __init__(self):
@@ -1501,7 +1503,7 @@ if(document.readyState === 'loading'){
 
     @app.get("/")
     def index():
-        return Response("<p>See <a href='/settings'>settings</a></p>", mimetype="text/html")
+        return redirect("/settings")
 
     @app.get("/settings")
     def settings_page():
