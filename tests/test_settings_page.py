@@ -33,6 +33,15 @@ def test_settings_serves_main_ui():
     assert 'Sprinkler Controller' in text
 
 
+def test_root_redirects_to_settings():
+    app = build_app()
+    client = app.test_client()
+    resp = client.get('/')
+    assert resp.status_code == 302
+    # Flask may include full URL in Location; ensure it ends with /settings
+    assert resp.headers['Location'].endswith('/settings')
+
+
 def test_pin_settings_lists_pins():
     app = build_app()
     client = app.test_client()
