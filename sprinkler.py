@@ -186,11 +186,15 @@ SETTINGS_HTML = """<!doctype html>
 body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#0b0f14;color:#e6edf3;padding:16px}
 a{color:#9fb1c1}
 .list{display:flex;flex-direction:column;gap:8px}
-.pin-row{display:flex;align-items:center;gap:10px;background:#10161d;border:1px solid #1e2936;border-radius:8px;padding:8px}
+.pin-row{display:flex;align-items:center;gap:10px;background:#10161d;border:1px solid #1e2936;border-radius:8px;padding:12px; touch-action: manipulation;}
 .pin-row span{min-width:80px}
-.pin-row input{flex:1;background:transparent;color:#e6edf3;border:1px solid #1e2936;border-radius:6px;padding:4px 6px}
+.pin-row input{flex:1;background:transparent;color:#e6edf3;border:1px solid #1e2936;border-radius:6px;padding:10px}
 .cols{display:flex;gap:24px;flex-wrap:wrap}
 .col{flex:1;min-width:200px}
+.drag-handle{cursor:grab;background:#0f1720;color:#9fb1c1;border:1px solid #1e2936;border-radius:6px;padding:8px 10px;min-width:44px;min-height:44px}
+.pin-row.dragging{opacity:.8}
+.placeholder{border:2px dashed #334155; background:transparent}
+@media (max-width:640px){ .pin-row{padding:14px; gap:12px} .pin-row span{min-width:auto} }
 </style>
 </head>
 <body>
@@ -207,13 +211,18 @@ a{color:#9fb1c1}
 </div>
 <p><a href=\"/\">Back</a></p>
 <script>
-let dragEl;
+let activePress=null, dragEl=null, placeholder=null, startY=0;
+const LP_MS=220;
+const supportsPointer='PointerEvent' in window;
 function makeRow(p){
-  const row=document.createElement('div'); row.className='pin-row'; row.draggable=true; row.dataset.pin=p.pin;
+  const row=document.createElement('div'); row.className='pin-row'; row.draggable=false; row.dataset.pin=p.pin;
+  const handle=document.createElement('button'); handle.type='button'; handle.className='drag-handle'; handle.setAttribute('aria-label','Reorder'); handle.textContent='≡'; row.appendChild(handle);
   const label=document.createElement('span'); label.textContent='GPIO '+p.pin; row.appendChild(label);
   const input=document.createElement('input'); input.value=p.name || ('Pin '+p.pin);
-  input.addEventListener('change',()=>{ const name=input.value.trim(); fetch('/api/pin/'+p.pin+'/name',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})}); });
+  let t; let lastVal=input.value;
+  input.addEventListener('input',()=>{ clearTimeout(t); const name=input.value.trim(); t=setTimeout(()=>{ if(name===lastVal) return; const prev=lastVal; lastVal=name; fetch('/api/pin/'+p.pin+'/name',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})}).then(r=>{ if(!r.ok){ lastVal=prev; input.value=prev; }}); },300); });
   row.appendChild(input);
+  attachDrag(handle,row);
   return row;
 }
 function sendPinOrder(){
@@ -221,19 +230,27 @@ function sendPinOrder(){
   const spare=[...document.querySelectorAll('#inactiveList .pin-row')].map(r=>parseInt(r.dataset.pin,10));
   fetch('/api/pins/reorder',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({active,spare})});
 }
-function setupDrag(list){
-  list.addEventListener('dragstart',e=>{ dragEl=e.target.closest('.pin-row'); e.dataTransfer.effectAllowed='move'; });
-  list.addEventListener('dragover',e=>{ e.preventDefault(); const target=e.target.closest('.pin-row'); if(!target){ list.appendChild(dragEl); return;} if(target===dragEl) return; const rect=target.getBoundingClientRect(); const next=(e.clientY-rect.top)/(rect.bottom-rect.top)>0.5; target.parentElement.insertBefore(dragEl,next?target.nextSibling:target); });
-  list.addEventListener('drop',e=>{ e.preventDefault(); sendPinOrder(); });
+function attachDrag(handle,row){
+  handle.addEventListener('keydown',(e)=>{ const list=row.parentElement; if(e.key==='ArrowUp'||e.key==='ArrowLeft'){ e.preventDefault(); if(row.previousElementSibling) list.insertBefore(row,row.previousElementSibling); else list.insertBefore(row,list.firstChild); sendPinOrder(); } if(e.key==='ArrowDown'||e.key==='ArrowRight'){ e.preventDefault(); if(row.nextElementSibling) list.insertBefore(row.nextElementSibling,row); else list.appendChild(row); sendPinOrder(); } });
+  if(supportsPointer){
+    handle.addEventListener('pointerdown',(e)=>{ if(e.button!==0) return; startY=e.clientY; activePress=setTimeout(()=>startDrag(row),LP_MS); handle.setPointerCapture(e.pointerId); });
+    handle.addEventListener('pointermove',(e)=>{ if(!dragEl && activePress && Math.abs(e.clientY-startY)>8){ clearTimeout(activePress); activePress=null; startDrag(row); } moveDrag(e); });
+    ['pointerup','pointercancel','lostpointercapture'].forEach(ev=>{ handle.addEventListener(ev,(e)=>{ if(activePress){ clearTimeout(activePress); activePress=null; } endDrag(e); }); });
+  }else{
+    handle.addEventListener('mousedown',(e)=>{ if(e.button===0) startDrag(row); });
+    document.addEventListener('mousemove',moveDrag);
+    document.addEventListener('mouseup',endDrag);
+  }
 }
+function startDrag(row){ dragEl=row; placeholder=document.createElement('div'); placeholder.className='pin-row placeholder'; placeholder.style.height=row.offsetHeight+'px'; row.parentElement.insertBefore(placeholder,row.nextSibling); row.classList.add('dragging'); }
+function moveDrag(e){ if(!dragEl) return; const lists=[document.getElementById('activeList'), document.getElementById('inactiveList')]; const y=e.clientY; for(const list of lists){ const rect=list.getBoundingClientRect(); if(y>=rect.top && y<=rect.bottom){ const children=[...list.querySelectorAll('.pin-row:not(.dragging)')]; let inserted=false; for(const child of children){ const r=child.getBoundingClientRect(); const before=y < r.top + r.height/2; if(before){ list.insertBefore(placeholder,child); inserted=true; break; } } if(!inserted) list.appendChild(placeholder); } } }
+function endDrag(_e){ if(!dragEl) return; const parent=placeholder.parentElement; parent.insertBefore(dragEl,placeholder); dragEl.classList.remove('dragging'); placeholder.remove(); dragEl=null; placeholder=null; sendPinOrder(); }
 fetch('/api/status').then(r=>r.json()).then(data=>{
   const active=document.getElementById('activeList');
   const inactive=document.getElementById('inactiveList');
   data.pins_slots.forEach(p=>active.appendChild(makeRow(p)));
   data.pins_spares.forEach(p=>inactive.appendChild(makeRow(p)));
 });
-setupDrag(document.getElementById('activeList'));
-setupDrag(document.getElementById('inactiveList'));
 </script>
 </body>
 </html>
@@ -1176,23 +1193,23 @@ function sendPinOrder(){
 }
 
 function setupPinDrag(list){
-  list.addEventListener('dragstart', e=>{
-    dragEl = e.target.closest('.pin-row');
-    e.dataTransfer.effectAllowed='move';
-  });
-  list.addEventListener('dragover', e=>{
-    e.preventDefault();
-    const target = e.target.closest('.pin-row');
-    if(!target){
-      list.appendChild(dragEl);
-      return;
+  list.querySelectorAll('.pin-row').forEach(row=>{
+    const handle=document.createElement('button'); handle.type='button'; handle.className='btn'; handle.textContent='≡'; handle.style.minWidth='44px'; handle.style.minHeight='44px'; handle.setAttribute('aria-label','Reorder'); row.insertBefore(handle,row.firstChild);
+    handle.addEventListener('keydown',(e)=>{ if(e.key==='ArrowUp'||e.key==='ArrowLeft'){ e.preventDefault(); if(row.previousElementSibling) list.insertBefore(row,row.previousElementSibling); else list.insertBefore(row,list.firstChild); sendPinOrder(); } if(e.key==='ArrowDown'||e.key==='ArrowRight'){ e.preventDefault(); if(row.nextElementSibling) list.insertBefore(row.nextElementSibling,row); else list.appendChild(row); sendPinOrder(); }});
+    if('PointerEvent' in window){
+      let press=null, sy=0, drag=null, ph=null;
+      function start(){ drag=row; ph=document.createElement('div'); ph.className='pin-row placeholder'; ph.style.height=row.offsetHeight+'px'; row.parentElement.insertBefore(ph,row.nextSibling); row.classList.add('dragging'); }
+      function move(e){ if(!drag) return; const lists=[document.getElementById('activeList'), document.getElementById('activeList')||document.getElementById('spareList')]; const y=e.clientY; for(const l of lists){ if(!l) continue; const rect=l.getBoundingClientRect(); if(y>=rect.top && y<=rect.bottom){ const children=[...l.querySelectorAll('.pin-row:not(.dragging)')]; let ins=false; for(const c of children){ const r=c.getBoundingClientRect(); const before=y < r.top + r.height/2; if(before){ l.insertBefore(ph,c); ins=true; break; } } if(!ins) l.appendChild(ph); } } }
+      function end(){ if(!drag) return; const parent=ph.parentElement; parent.insertBefore(drag,ph); drag.classList.remove('dragging'); ph.remove(); drag=null; ph=null; sendPinOrder(); }
+      handle.addEventListener('pointerdown',(e)=>{ if(e.button!==0) return; sy=e.clientY; press=setTimeout(()=>start(),220); handle.setPointerCapture(e.pointerId); });
+      handle.addEventListener('pointermove',(e)=>{ if(!drag && press && Math.abs(e.clientY-sy)>8){ clearTimeout(press); press=null; start(); } move(e); });
+      ['pointerup','pointercancel','lostpointercapture'].forEach(ev=> handle.addEventListener(ev,()=>{ if(press){ clearTimeout(press); press=null; } end(); }));
+    }else{
+      handle.addEventListener('mousedown',()=>start());
+      document.addEventListener('mousemove',move);
+      document.addEventListener('mouseup',end);
     }
-    if(target===dragEl) return;
-    const rect = target.getBoundingClientRect();
-    const next = (e.clientY - rect.top)/(rect.bottom-rect.top) > 0.5;
-    target.parentElement.insertBefore(dragEl, next ? target.nextSibling : target);
   });
-  list.addEventListener('drop', e=>{ e.preventDefault(); sendPinOrder(); });
 }
 
   /* ========= Schedules ========= */
@@ -1367,22 +1384,13 @@ function sendScheduleOrder(){
 }
 
 function setupScheduleDrag(){
-  const tbody = document.getElementById('schedBody');
-  let dragEl;
-  tbody.addEventListener('dragstart', e=>{
-    dragEl = e.target.closest('tr');
-    e.dataTransfer.effectAllowed='move';
-  });
-  tbody.addEventListener('dragover', e=>{
-    e.preventDefault();
-    const target = e.target.closest('tr');
-    if(!target || target===dragEl) return;
-    const rect = target.getBoundingClientRect();
-    const next = (e.clientY - rect.top)/(rect.bottom-rect.top) > 0.5;
-    tbody.insertBefore(dragEl, next ? target.nextSibling : target);
-  });
-  tbody.addEventListener('drop', e=>{ e.preventDefault(); sendScheduleOrder(); });
-}
+  const tbody=document.getElementById('schedBody');
+  let press=null, drag=null, ph=null, sy=0;
+  function start(row){ drag=row; ph=document.createElement('tr'); ph.className='placeholder'; ph.style.height=row.offsetHeight+'px'; row.parentElement.insertBefore(ph,row.nextSibling); row.classList.add('dragging'); }
+  function move(e){ if(!drag) return; const y=e.clientY; const rows=[...tbody.querySelectorAll('tr:not(.dragging)')]; let inserted=false; for(const r of rows){ const rect=r.getBoundingClientRect(); const before=y < rect.top + rect.height/2; if(before){ tbody.insertBefore(ph,r); inserted=true; break; } } if(!inserted) tbody.appendChild(ph); }
+  function end(){ if(!drag) return; ph.parentElement.insertBefore(drag,ph); drag.classList.remove('dragging'); ph.remove(); drag=null; ph=null; sendScheduleOrder(); }
+  tbody.addEventListener('keydown',(e)=>{ const row=e.target.closest('tr'); if(!row) return; if(e.key==='ArrowUp'||e.key==='ArrowLeft'){ e.preventDefault(); if(row.previousElementSibling) tbody.insertBefore(row,row.previousElementSibling); else tbody.insertBefore(row,tbody.firstChild); sendScheduleOrder(); } if(e.key==='ArrowDown'||e.key==='ArrowRight'){ e.preventDefault(); if(row.nextElementSibling) tbody.insertBefore(row.nextElementSibling,row); else tbody.appendChild(row); sendScheduleOrder(); }});
+  tbody.querySelectorAll('tr').forEach(tr=>{ const h=document.createElement('button'); h.type='button'; h.textContent='≡'; h.className='btn'; h.style.minWidth='44px'; h.style.minHeight='44px'; h.setAttribute('aria-label','Reorder'); tr.firstElementChild?.prepend(h); if('PointerEvent' in window){ h.addEventListener('pointerdown',(e)=>{ if(e.button!==0) return; sy=e.clientY; press=setTimeout(()=>start(tr),220); h.setPointerCapture(e.pointerId); }); h.addEventListener('pointermove',(e)=>{ if(!drag && press && Math.abs(e.clientY-sy)>8){ clearTimeout(press); press=null; start(tr); } move(e); }); ['pointerup','pointercancel','lostpointercapture'].forEach(ev=> h.addEventListener(ev,()=>{ if(press){ clearTimeout(press); press=null; } end(); })); }else{ h.addEventListener('mousedown',()=>start(tr)); document.addEventListener('mousemove',move); document.addEventListener('mouseup',end); } }); }
 
 function sequenceSchedules(){
   const startVal = document.getElementById('seqStart').value.trim();
