@@ -186,11 +186,15 @@ SETTINGS_HTML = """<!doctype html>
 body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#0b0f14;color:#e6edf3;padding:16px}
 a{color:#9fb1c1}
 .list{display:flex;flex-direction:column;gap:8px}
-.pin-row{display:flex;align-items:center;gap:10px;background:#10161d;border:1px solid #1e2936;border-radius:8px;padding:8px}
+.pin-row{display:flex;align-items:center;gap:10px;background:#10161d;border:1px solid #1e2936;border-radius:8px;padding:12px; touch-action: manipulation;}
 .pin-row span{min-width:80px}
-.pin-row input{flex:1;background:transparent;color:#e6edf3;border:1px solid #1e2936;border-radius:6px;padding:4px 6px}
+.pin-row input{flex:1;background:transparent;color:#e6edf3;border:1px solid #1e2936;border-radius:6px;padding:10px}
 .cols{display:flex;gap:24px;flex-wrap:wrap}
 .col{flex:1;min-width:200px}
+.drag-handle{cursor:grab;background:#0f1720;color:#9fb1c1;border:1px solid #1e2936;border-radius:6px;padding:8px 10px;min-width:44px;min-height:44px}
+.pin-row.dragging{opacity:.8}
+.placeholder{border:2px dashed #334155; background:transparent}
+@media (max-width:640px){ .pin-row{padding:14px; gap:12px} .pin-row span{min-width:auto} }
 </style>
 </head>
 <body>
@@ -207,13 +211,18 @@ a{color:#9fb1c1}
 </div>
 <p><a href=\"/\">Back</a></p>
 <script>
-let dragEl;
+let activePress=null, dragEl=null, placeholder=null, startY=0;
+const LP_MS=220;
+const supportsPointer='PointerEvent' in window;
 function makeRow(p){
-  const row=document.createElement('div'); row.className='pin-row'; row.draggable=true; row.dataset.pin=p.pin;
+  const row=document.createElement('div'); row.className='pin-row'; row.draggable=false; row.dataset.pin=p.pin;
+  const handle=document.createElement('button'); handle.type='button'; handle.className='drag-handle'; handle.setAttribute('aria-label','Reorder'); handle.textContent='≡'; row.appendChild(handle);
   const label=document.createElement('span'); label.textContent='GPIO '+p.pin; row.appendChild(label);
   const input=document.createElement('input'); input.value=p.name || ('Pin '+p.pin);
-  input.addEventListener('change',()=>{ const name=input.value.trim(); fetch('/api/pin/'+p.pin+'/name',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})}); });
+  let t; let lastVal=input.value;
+  input.addEventListener('input',()=>{ clearTimeout(t); const name=input.value.trim(); t=setTimeout(()=>{ if(name===lastVal) return; const prev=lastVal; lastVal=name; fetch('/api/pin/'+p.pin+'/name',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})}).then(r=>{ if(!r.ok){ lastVal=prev; input.value=prev; }}); },300); });
   row.appendChild(input);
+  attachDrag(handle,row);
   return row;
 }
 function sendPinOrder(){
@@ -221,19 +230,27 @@ function sendPinOrder(){
   const spare=[...document.querySelectorAll('#inactiveList .pin-row')].map(r=>parseInt(r.dataset.pin,10));
   fetch('/api/pins/reorder',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({active,spare})});
 }
-function setupDrag(list){
-  list.addEventListener('dragstart',e=>{ dragEl=e.target.closest('.pin-row'); e.dataTransfer.effectAllowed='move'; });
-  list.addEventListener('dragover',e=>{ e.preventDefault(); const target=e.target.closest('.pin-row'); if(!target){ list.appendChild(dragEl); return;} if(target===dragEl) return; const rect=target.getBoundingClientRect(); const next=(e.clientY-rect.top)/(rect.bottom-rect.top)>0.5; target.parentElement.insertBefore(dragEl,next?target.nextSibling:target); });
-  list.addEventListener('drop',e=>{ e.preventDefault(); sendPinOrder(); });
+function attachDrag(handle,row){
+  handle.addEventListener('keydown',(e)=>{ const list=row.parentElement; if(e.key==='ArrowUp'||e.key==='ArrowLeft'){ e.preventDefault(); if(row.previousElementSibling) list.insertBefore(row,row.previousElementSibling); else list.insertBefore(row,list.firstChild); sendPinOrder(); } if(e.key==='ArrowDown'||e.key==='ArrowRight'){ e.preventDefault(); if(row.nextElementSibling) list.insertBefore(row.nextElementSibling,row); else list.appendChild(row); sendPinOrder(); } });
+  if(supportsPointer){
+    handle.addEventListener('pointerdown',(e)=>{ if(e.button!==0) return; startY=e.clientY; activePress=setTimeout(()=>startDrag(row),LP_MS); handle.setPointerCapture(e.pointerId); });
+    handle.addEventListener('pointermove',(e)=>{ if(!dragEl && activePress && Math.abs(e.clientY-startY)>8){ clearTimeout(activePress); activePress=null; startDrag(row); } moveDrag(e); });
+    ['pointerup','pointercancel','lostpointercapture'].forEach(ev=>{ handle.addEventListener(ev,(e)=>{ if(activePress){ clearTimeout(activePress); activePress=null; } endDrag(e); }); });
+  }else{
+    handle.addEventListener('mousedown',(e)=>{ if(e.button===0) startDrag(row); });
+    document.addEventListener('mousemove',moveDrag);
+    document.addEventListener('mouseup',endDrag);
+  }
 }
+function startDrag(row){ dragEl=row; placeholder=document.createElement('div'); placeholder.className='pin-row placeholder'; placeholder.style.height=row.offsetHeight+'px'; row.parentElement.insertBefore(placeholder,row.nextSibling); row.classList.add('dragging'); }
+function moveDrag(e){ if(!dragEl) return; const lists=[document.getElementById('activeList'), document.getElementById('inactiveList')]; const y=e.clientY; for(const list of lists){ const rect=list.getBoundingClientRect(); if(y>=rect.top && y<=rect.bottom){ const children=[...list.querySelectorAll('.pin-row:not(.dragging)')]; let inserted=false; for(const child of children){ const r=child.getBoundingClientRect(); const before=y < r.top + r.height/2; if(before){ list.insertBefore(placeholder,child); inserted=true; break; } } if(!inserted) list.appendChild(placeholder); } } }
+function endDrag(_e){ if(!dragEl) return; const parent=placeholder.parentElement; parent.insertBefore(dragEl,placeholder); dragEl.classList.remove('dragging'); placeholder.remove(); dragEl=null; placeholder=null; sendPinOrder(); }
 fetch('/api/status').then(r=>r.json()).then(data=>{
   const active=document.getElementById('activeList');
   const inactive=document.getElementById('inactiveList');
   data.pins_slots.forEach(p=>active.appendChild(makeRow(p)));
   data.pins_spares.forEach(p=>inactive.appendChild(makeRow(p)));
 });
-setupDrag(document.getElementById('activeList'));
-setupDrag(document.getElementById('inactiveList'));
 </script>
 </body>
 </html>
@@ -616,7 +633,19 @@ class SprinklerScheduler:
                     pass
         if not self.cfg.get("automation_enabled", True) or not self.cfg.get("system_enabled", True):
             return
-        for entry in self.cfg.get("schedules", []):
+        schedules_list = self.cfg.get("schedules", [])
+        groups = self.cfg.get("schedule_groups")
+        if isinstance(groups, list) and groups:
+            cur = self.cfg.get("current_group_id")
+            group = None
+            for g in groups:
+                if g.get("id") == cur:
+                    group = g
+                    break
+            if group is None:
+                group = groups[0]
+            schedules_list = group.get("schedules", []) or []
+        for entry in schedules_list:
             if not entry.get("enabled", True):
                 continue
             try:
@@ -634,7 +663,6 @@ class SprinklerScheduler:
                     days = list(range(7))
                 for d in days:
                     di = int(d)
-                    # ON job; use _maybe_on wrapper if rain manager provided
                     trig_on = CronTrigger(day_of_week=di, hour=on_hour, minute=on_minute)
                     self.sched.add_job(
                         self._maybe_on,
@@ -644,8 +672,6 @@ class SprinklerScheduler:
                         replace_existing=True,
                         misfire_grace_time=300,
                     )
-                    # OFF job; if off time precedes or equals on time,
-                    # schedule for the following day.
                     off_day = di if off_min_total > on_min_total else (di + 1) % 7
                     trig_off = CronTrigger(day_of_week=off_day, hour=off_hour, minute=off_minute)
                     self.sched.add_job(
@@ -657,7 +683,6 @@ class SprinklerScheduler:
                         misfire_grace_time=300,
                     )
             except Exception as e:
-                # Log and skip invalid entries; do not raise
                 try:
                     print(f"[SchedulerError] Skipping schedule {entry.get('id','?')}: {e}")
                 except Exception:
@@ -951,6 +976,43 @@ input[type="number"]{width:90px}
       <div class="chev">▶</div>
     </div>
     <div class="collap-body" id="schedulesBody">
+        <div id="groupsBar" class="row" style="margin-bottom:10px; align-items:center; gap:8px">
+          <label class="inline">Group
+            <select id="groupSelect"></select>
+          </label>
+          <button id="newGroupBtn" class="btn">New Group</button>
+          <button id="deleteGroupBtn" class="btn">Delete Group</button>
+        </div>
+        <div id="addAllPanel" class="card" style="padding:10px; margin-bottom:12px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap">
+            <h3 style="margin:0; font-size:.95rem; color:var(--muted)">Add All Active Pins</h3>
+            <button id="toggleAddAll" class="btn">Show</button>
+          </div>
+          <div id="addAllBody" style="display:none; margin-top:10px;">
+            <div class="row" style="gap:8px; align-items:center; margin-bottom:8px;">
+              <label>Start <input id="aaOn" type="text" placeholder="HH:MM" size="5"></label>
+              <label>Duration (min) <input id="aaDur" type="number" min="1" value="10" style="width:90px"></label>
+              <label>Gap (min) <input id="aaGap" type="number" min="0" value="0" style="width:90px"></label>
+            </div>
+            <div class="row" id="aaDays" style="margin-bottom:8px;">
+              <label><input type="checkbox" value="0">Mon</label>
+              <label><input type="checkbox" value="1">Tue</label>
+              <label><input type="checkbox" value="2">Wed</label>
+              <label><input type="checkbox" value="3">Thu</label>
+              <label><input type="checkbox" value="4">Fri</label>
+              <label><input type="checkbox" value="5">Sat</label>
+              <label><input type="checkbox" value="6">Sun</label>
+            </div>
+            <div>
+              <div style="color:var(--muted); margin-bottom:6px;">Order</div>
+              <div id="aaList" class="list"></div>
+            </div>
+            <div style="margin-top:10px; display:flex; gap:8px;">
+              <button id="aaSubmit" class="btn primary">Create Sequence</button>
+            </div>
+          </div>
+        </div>
+
       <div class="section-pad">
         <div class="add-sched" style="margin-bottom:12px;">
           <h3 style="margin:12px 0 8px; font-size:.95rem; color:var(--muted)">Add Schedule</h3>
@@ -1061,6 +1123,9 @@ function fetchStatus(){
     updateHeader(data);
     renderPins(data.pins_slots, data.automation_enabled, data.system_enabled);
     updateSchedules(data.schedules);
+    renderGroups(data.schedule_groups);
+    hydrateAddAllList(data.pins_slots);
+
     hydratePinSelect(data.pins);
   });
   fetch('/api/rain').then(r=>r.json()).then(updateRain).catch(()=>{});
@@ -1168,23 +1233,23 @@ function sendPinOrder(){
 }
 
 function setupPinDrag(list){
-  list.addEventListener('dragstart', e=>{
-    dragEl = e.target.closest('.pin-row');
-    e.dataTransfer.effectAllowed='move';
-  });
-  list.addEventListener('dragover', e=>{
-    e.preventDefault();
-    const target = e.target.closest('.pin-row');
-    if(!target){
-      list.appendChild(dragEl);
-      return;
+  list.querySelectorAll('.pin-row').forEach(row=>{
+    const handle=document.createElement('button'); handle.type='button'; handle.className='btn'; handle.textContent='≡'; handle.style.minWidth='44px'; handle.style.minHeight='44px'; handle.setAttribute('aria-label','Reorder'); row.insertBefore(handle,row.firstChild);
+    handle.addEventListener('keydown',(e)=>{ if(e.key==='ArrowUp'||e.key==='ArrowLeft'){ e.preventDefault(); if(row.previousElementSibling) list.insertBefore(row,row.previousElementSibling); else list.insertBefore(row,list.firstChild); sendPinOrder(); } if(e.key==='ArrowDown'||e.key==='ArrowRight'){ e.preventDefault(); if(row.nextElementSibling) list.insertBefore(row.nextElementSibling,row); else list.appendChild(row); sendPinOrder(); }});
+    if('PointerEvent' in window){
+      let press=null, sy=0, drag=null, ph=null;
+      function start(){ drag=row; ph=document.createElement('div'); ph.className='pin-row placeholder'; ph.style.height=row.offsetHeight+'px'; row.parentElement.insertBefore(ph,row.nextSibling); row.classList.add('dragging'); }
+      function move(e){ if(!drag) return; const lists=[document.getElementById('activeList'), document.getElementById('activeList')||document.getElementById('spareList')]; const y=e.clientY; for(const l of lists){ if(!l) continue; const rect=l.getBoundingClientRect(); if(y>=rect.top && y<=rect.bottom){ const children=[...l.querySelectorAll('.pin-row:not(.dragging)')]; let ins=false; for(const c of children){ const r=c.getBoundingClientRect(); const before=y < r.top + r.height/2; if(before){ l.insertBefore(ph,c); ins=true; break; } } if(!ins) l.appendChild(ph); } } }
+      function end(){ if(!drag) return; const parent=ph.parentElement; parent.insertBefore(drag,ph); drag.classList.remove('dragging'); ph.remove(); drag=null; ph=null; sendPinOrder(); }
+      handle.addEventListener('pointerdown',(e)=>{ if(e.button!==0) return; sy=e.clientY; press=setTimeout(()=>start(),220); handle.setPointerCapture(e.pointerId); });
+      handle.addEventListener('pointermove',(e)=>{ if(!drag && press && Math.abs(e.clientY-sy)>8){ clearTimeout(press); press=null; start(); } move(e); });
+      ['pointerup','pointercancel','lostpointercapture'].forEach(ev=> handle.addEventListener(ev,()=>{ if(press){ clearTimeout(press); press=null; } end(); }));
+    }else{
+      handle.addEventListener('mousedown',()=>start());
+      document.addEventListener('mousemove',move);
+      document.addEventListener('mouseup',end);
     }
-    if(target===dragEl) return;
-    const rect = target.getBoundingClientRect();
-    const next = (e.clientY - rect.top)/(rect.bottom-rect.top) > 0.5;
-    target.parentElement.insertBefore(dragEl, next ? target.nextSibling : target);
   });
-  list.addEventListener('drop', e=>{ e.preventDefault(); sendPinOrder(); });
 }
 
   /* ========= Schedules ========= */
@@ -1359,22 +1424,13 @@ function sendScheduleOrder(){
 }
 
 function setupScheduleDrag(){
-  const tbody = document.getElementById('schedBody');
-  let dragEl;
-  tbody.addEventListener('dragstart', e=>{
-    dragEl = e.target.closest('tr');
-    e.dataTransfer.effectAllowed='move';
-  });
-  tbody.addEventListener('dragover', e=>{
-    e.preventDefault();
-    const target = e.target.closest('tr');
-    if(!target || target===dragEl) return;
-    const rect = target.getBoundingClientRect();
-    const next = (e.clientY - rect.top)/(rect.bottom-rect.top) > 0.5;
-    tbody.insertBefore(dragEl, next ? target.nextSibling : target);
-  });
-  tbody.addEventListener('drop', e=>{ e.preventDefault(); sendScheduleOrder(); });
-}
+  const tbody=document.getElementById('schedBody');
+  let press=null, drag=null, ph=null, sy=0;
+  function start(row){ drag=row; ph=document.createElement('tr'); ph.className='placeholder'; ph.style.height=row.offsetHeight+'px'; row.parentElement.insertBefore(ph,row.nextSibling); row.classList.add('dragging'); }
+  function move(e){ if(!drag) return; const y=e.clientY; const rows=[...tbody.querySelectorAll('tr:not(.dragging)')]; let inserted=false; for(const r of rows){ const rect=r.getBoundingClientRect(); const before=y < rect.top + rect.height/2; if(before){ tbody.insertBefore(ph,r); inserted=true; break; } } if(!inserted) tbody.appendChild(ph); }
+  function end(){ if(!drag) return; ph.parentElement.insertBefore(drag,ph); drag.classList.remove('dragging'); ph.remove(); drag=null; ph=null; sendScheduleOrder(); }
+  tbody.addEventListener('keydown',(e)=>{ const row=e.target.closest('tr'); if(!row) return; if(e.key==='ArrowUp'||e.key==='ArrowLeft'){ e.preventDefault(); if(row.previousElementSibling) tbody.insertBefore(row,row.previousElementSibling); else tbody.insertBefore(row,tbody.firstChild); sendScheduleOrder(); } if(e.key==='ArrowDown'||e.key==='ArrowRight'){ e.preventDefault(); if(row.nextElementSibling) tbody.insertBefore(row.nextElementSibling,row); else tbody.appendChild(row); sendScheduleOrder(); }});
+  tbody.querySelectorAll('tr').forEach(tr=>{ const h=document.createElement('button'); h.type='button'; h.textContent='≡'; h.className='btn'; h.style.minWidth='44px'; h.style.minHeight='44px'; h.setAttribute('aria-label','Reorder'); tr.firstElementChild?.prepend(h); if('PointerEvent' in window){ h.addEventListener('pointerdown',(e)=>{ if(e.button!==0) return; sy=e.clientY; press=setTimeout(()=>start(tr),220); h.setPointerCapture(e.pointerId); }); h.addEventListener('pointermove',(e)=>{ if(!drag && press && Math.abs(e.clientY-sy)>8){ clearTimeout(press); press=null; start(tr); } move(e); }); ['pointerup','pointercancel','lostpointercapture'].forEach(ev=> h.addEventListener(ev,()=>{ if(press){ clearTimeout(press); press=null; } end(); })); }else{ h.addEventListener('mousedown',()=>start(tr)); document.addEventListener('mousemove',move); document.addEventListener('mouseup',end); } }); }
 
 function sequenceSchedules(){
   const startVal = document.getElementById('seqStart').value.trim();
@@ -1401,6 +1457,106 @@ function sequenceSchedules(){
   }
   Promise.all(promises).then(fetchStatus);
 }
+/* ========= Groups + Add-All ========= */
+function renderGroups(info){
+  const sel = document.getElementById('groupSelect');
+  const delBtn = document.getElementById('deleteGroupBtn');
+  if(!sel) return;
+  sel.innerHTML = '';
+  const groups = (info && Array.isArray(info.groups)) ? info.groups : [];
+  const current = info ? info.current : null;
+  for(const g of groups){
+    const o = document.createElement('option');
+    o.value = g.id || '';
+    o.textContent = g.name ? `${g.name} (${g.count||0})` : `(unnamed) (${g.count||0})`;
+    if(g.id === current) o.selected = true;
+    sel.appendChild(o);
+  }
+  delBtn.disabled = groups.length <= 1;
+}
+
+function fetchGroupsAndRefresh(){
+  fetch('/api/schedule-groups').then(r=>r.json()).then(data=>{
+    renderGroups(data);
+    fetchStatus();
+  });
+}
+
+function selectGroup(id){
+  return fetch('/api/schedule-groups/select', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({id})})
+    .then(fetchStatus);
+}
+
+function createGroup(){
+  const name = prompt('New group name?', '') || '';
+  return fetch('/api/schedule-groups', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name})})
+    .then(fetchStatus);
+}
+
+function deleteGroup(){
+  const sel = document.getElementById('groupSelect');
+  if(!sel || !sel.value) return;
+  if(!confirm('Delete this group?')) return;
+  fetch(`/api/schedule-groups/${sel.value}`, {method:'DELETE'}).then(fetchStatus);
+}
+
+function toggleAddAll(){
+  const body = document.getElementById('addAllBody');
+  const btn = document.getElementById('toggleAddAll');
+  if(!body || !btn) return;
+  const show = body.style.display === 'none';
+  body.style.display = show ? 'block' : 'none';
+  btn.textContent = show ? 'Hide' : 'Show';
+}
+
+function hydrateAddAllList(pins){
+  const list = document.getElementById('aaList');
+  if(!list) return;
+  list.innerHTML = '';
+  pins.forEach(p=>{
+    const row=document.createElement('div'); row.className='pin-row'; row.draggable=false; row.dataset.pin=p.pin;
+    const handle=document.createElement('button'); handle.type='button'; handle.className='drag-handle'; handle.setAttribute('aria-label','Reorder'); handle.textContent='≡'; row.appendChild(handle);
+    const label=document.createElement('span'); label.textContent=(p.name || ('Pin '+p.pin)); row.appendChild(label);
+    list.appendChild(row);
+    attachAA_Drag(handle, row, list);
+  });
+}
+
+let aaPress=null, aaDrag=null, aaPH=null, aaSY=0;
+function attachAA_Drag(handle,row,list){
+  handle.addEventListener('keydown',(e)=>{ if(e.key==='ArrowUp'||e.key==='ArrowLeft'){ e.preventDefault(); if(row.previousElementSibling) list.insertBefore(row,row.previousElementSibling); else list.insertBefore(row,list.firstChild); } if(e.key==='ArrowDown'||e.key==='ArrowRight'){ e.preventDefault(); if(row.nextElementSibling) list.insertBefore(row.nextElementSibling,row); else list.appendChild(row); } });
+  if('PointerEvent' in window){
+    handle.addEventListener('pointerdown',(e)=>{ if(e.button!==0) return; aaSY=e.clientY; aaPress=setTimeout(()=>aaStart(row,list),220); handle.setPointerCapture(e.pointerId); });
+    handle.addEventListener('pointermove',(e)=>{ if(!aaDrag && aaPress && Math.abs(e.clientY-aaSY)>8){ clearTimeout(aaPress); aaPress=null; aaStart(row,list); } aaMove(e,list); });
+    ['pointerup','pointercancel','lostpointercapture'].forEach(ev=> handle.addEventListener(ev,()=>{ if(aaPress){ clearTimeout(aaPress); aaPress=null; } aaEnd(list); }));
+  }else{
+    handle.addEventListener('mousedown',()=>aaStart(row,list));
+    document.addEventListener('mousemove',(e)=>aaMove(e,list));
+    document.addEventListener('mouseup',()=>aaEnd(list));
+  }
+}
+function aaStart(row,list){ aaDrag=row; aaPH=document.createElement('div'); aaPH.className='pin-row placeholder'; aaPH.style.height=row.offsetHeight+'px'; list.insertBefore(aaPH,row.nextSibling); row.classList.add('dragging'); }
+function aaMove(e,list){ if(!aaDrag) return; const y=e.clientY; const children=[...list.querySelectorAll('.pin-row:not(.dragging)')]; let inserted=false; for(const child of children){ const r=child.getBoundingClientRect(); const before = y < r.top + r.height/2; if(before){ list.insertBefore(aaPH, child); inserted=true; break; } } if(!inserted) list.appendChild(aaPH); }
+function aaEnd(list){ if(!aaDrag) return; const parent=aaPH.parentElement; parent.insertBefore(aaDrag, aaPH); aaDrag.classList.remove('dragging'); aaPH.remove(); aaDrag=null; aaPH=null; }
+
+function submitAddAll(){
+  const sel = document.getElementById('groupSelect');
+  const gid = sel && sel.value;
+  if(!gid){ alert('Select or create a group first.'); return; }
+  const onStr = document.getElementById('aaOn').value.trim();
+  const durMin = parseInt(document.getElementById('aaDur').value,10);
+  const gapMin = parseInt(document.getElementById('aaGap').value,10) || 0;
+  const onM = parseHHMM(onStr);
+  if(onM==null || !Number.isFinite(durMin) || durMin<=0){ alert('Enter valid Start HH:MM and Duration minutes'); return; }
+  const days = [...document.querySelectorAll('#aaDays input[type=checkbox]')].filter(cb=>cb.checked).map(cb=>parseInt(cb.value,10));
+  if(days.length===0){ alert('Select at least one day'); return; }
+  const order = [...document.querySelectorAll('#aaList .pin-row')].map(r=>parseInt(r.dataset.pin,10));
+  if(order.length===0){ alert('No active pins to add'); return; }
+  const payload = { order, on: toHHMM(onM), duration_minutes: durMin, gap_minutes: gapMin, days };
+  fetch(`/api/schedule-groups/${gid}/add-all`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)})
+    .then(r=> r.ok ? fetchStatus() : r.text().then(t=>alert(t)));
+}
+
 
   /* ========= Rain ========= */
   function updateRain(rd){
@@ -1425,6 +1581,13 @@ function sequenceSchedules(){
     sum.textContent = 'Enabled: ' + (en && en.checked ? 'Yes' : 'No') + ' • Threshold: ' + (th ? th.value : thr) + '%';
   }
 }
+  // Groups controls
+  document.getElementById('groupSelect').addEventListener('change', (e)=> selectGroup(e.target.value));
+  document.getElementById('newGroupBtn').addEventListener('click', createGroup);
+  document.getElementById('deleteGroupBtn').addEventListener('click', deleteGroup);
+  document.getElementById('toggleAddAll').addEventListener('click', toggleAddAll);
+  document.getElementById('aaSubmit').addEventListener('click', submitAddAll);
+
 function init(){
   setupPinDrag(document.getElementById('activeList'));
   setupScheduleDrag();
@@ -1560,17 +1723,14 @@ if(document.readyState === 'loading'){
     @app.get("/api/status")
     def api_status():
         with LOCK:
-            # Sorted pins (Slots 1–16 first, then Spares)
             slots_sorted, spares_sorted, pins_sorted = _split_and_sort_pins_for_view(cfg, pinman)
             pins_view = pins_sorted
 
-            # Build a mapping of schedule id -> earliest next ON run time
             next_run_map = {}
             try:
                 jobs = sched.sched.get_jobs()
                 for job in jobs:
                     jid = getattr(job, 'id', '')
-                    # id format: <schedule_id>-on-<day> or <schedule_id>-off-<day>
                     if '-on-' in jid:
                         sched_id = jid.split('-on-')[0]
                         nr = getattr(job, 'next_run_time', None)
@@ -1581,9 +1741,24 @@ if(document.readyState === 'loading'){
             except Exception:
                 next_run_map = {}
 
-            # Build schedules view
+            # Determine current schedules (support groups)
+            schedules_src = cfg.get("schedules", [])
+            groups = cfg.get("schedule_groups")
+            current_group_id = None
+            if isinstance(groups, list) and groups:
+                current_group_id = cfg.get("current_group_id")
+                group = None
+                for g in groups:
+                    if g.get("id") == current_group_id:
+                        group = g
+                        break
+                if group is None:
+                    group = groups[0]
+                    current_group_id = group.get("id")
+                schedules_src = group.get("schedules", []) or []
+
             sch_view = []
-            for s in cfg.get("schedules", []):
+            for s in schedules_src:
                 nr_dt = next_run_map.get(s["id"])
                 if nr_dt:
                     try:
@@ -1592,7 +1767,6 @@ if(document.readyState === 'loading'){
                         nr_str = str(nr_dt)
                 else:
                     nr_str = None
-
                 sch_view.append({
                     "id": s["id"],
                     "pin": int(s["pin"]),
@@ -1605,7 +1779,6 @@ if(document.readyState === 'loading'){
                     "next_run": nr_str,
                 })
 
-            # Time/meta fields
             now_dt = datetime.now().astimezone()
             server_time_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
             server_time_iso = now_dt.isoformat()
@@ -1613,16 +1786,24 @@ if(document.readyState === 'loading'){
             server_tz = (now_dt.tzinfo.tzname(now_dt) if now_dt.tzinfo else '')
             server_utc_offset = now_dt.strftime('%z')
 
+            groups_summary = {"current": None, "groups": []}
+            if isinstance(groups, list):
+                groups_summary = {
+                    "current": current_group_id,
+                    "groups": [{"id": g.get("id"), "name": g.get("name", ""), "count": len(g.get("schedules", []))} for g in groups],
+                }
+
             return jsonify({
-                "pins": pins_view,                 # combined, sorted
-                "pins_slots": slots_sorted,        # slots only
-                "pins_spares": spares_sorted,      # spares only
+                "pins": pins_view,
+                "pins_slots": slots_sorted,
+                "pins_spares": spares_sorted,
                 "schedules": sch_view,
+                "schedule_groups": groups_summary,
                 "automation_enabled": bool(cfg.get("automation_enabled", True)),
                 "system_enabled": bool(cfg.get("system_enabled", True)),
                 "ntp": cfg.get("ntp", {}),
-                "now": server_time_str,            # legacy
-                "server_time": server_time_str,    # legacy
+                "now": server_time_str,
+                "server_time": server_time_str,
                 "server_time_iso": server_time_iso,
                 "server_time_str": server_time_str,
                 "server_weekday": server_weekday,
@@ -1793,7 +1974,20 @@ if(document.readyState === 'loading'){
                 "days": days,
                 "enabled": True,
             }
-            cfg.setdefault("schedules", []).append(entry)
+            groups = cfg.get("schedule_groups")
+            if isinstance(groups, list) and groups:
+                cur = cfg.get("current_group_id")
+                group = None
+                for g in groups:
+                    if g.get("id") == cur:
+                        group = g
+                        break
+                if group is None:
+                    group = groups[0]
+                    cfg["current_group_id"] = group.get("id")
+                group.setdefault("schedules", []).append(entry)
+            else:
+                cfg.setdefault("schedules", []).append(entry)
             save_config(cfg)
         sched.reload_jobs()
         return jsonify({"id": entry["id"]})
@@ -1809,7 +2003,20 @@ if(document.readyState === 'loading'){
         data = request.get_json(force=True) or {}
         with LOCK:
             entry = None
-            for s in cfg.get("schedules", []):
+            schedules_src = cfg.get("schedules", [])
+            groups = cfg.get("schedule_groups")
+            if isinstance(groups, list) and groups:
+                cur = cfg.get("current_group_id")
+                group = None
+                for g in groups:
+                    if g.get("id") == cur:
+                        group = g
+                        break
+                if group is None:
+                    group = groups[0]
+                    cfg["current_group_id"] = group.get("id")
+                schedules_src = group.get("schedules", []) or []
+            for s in schedules_src:
                 if s["id"] == id:
                     entry = s
                     break
@@ -1876,18 +2083,32 @@ if(document.readyState === 'loading'){
                     return ("No days selected", 400)
                 entry["days"] = newdays
             save_config(cfg)
-        sched.reload_jobs()
         return "OK"
 
     @app.route("/api/schedule/<id>", methods=["DELETE"])
     def api_schedule_delete(id: str):
         """Remove a schedule by its id."""
         with LOCK:
-            before = len(cfg.get("schedules", []))
-            cfg["schedules"] = [s for s in cfg.get("schedules", []) if s.get("id") != id]
+            groups = cfg.get("schedule_groups")
+            if isinstance(groups, list) and groups:
+                cur = cfg.get("current_group_id")
+                group = None
+                for g in groups:
+                    if g.get("id") == cur:
+                        group = g
+                        break
+                if group is None:
+                    group = groups[0]
+                    cfg["current_group_id"] = group.get("id")
+                before = len(group.get("schedules", []))
+                group["schedules"] = [s for s in group.get("schedules", []) if s.get("id") != id]
+                after = len(group.get("schedules", []))
+            else:
+                before = len(cfg.get("schedules", []))
+                cfg["schedules"] = [s for s in cfg.get("schedules", []) if s.get("id") != id]
+                after = len(cfg.get("schedules", []))
             save_config(cfg)
-        sched.reload_jobs()
-        return jsonify({"deleted": before - len(cfg.get("schedules", []))})
+        return jsonify({"deleted": before - after})
 
     @app.post("/api/schedules/reorder")
     def api_schedules_reorder():
@@ -1897,14 +2118,157 @@ if(document.readyState === 'loading'){
         if not isinstance(order, list):
             return ("Invalid order", 400)
         with LOCK:
-            sched_map = {s["id"]: s for s in cfg.get("schedules", [])}
-            if set(order) != set(sched_map.keys()):
-                return ("Order must contain all schedules", 400)
-            cfg["schedules"] = [sched_map[i] for i in order]
+            groups = cfg.get("schedule_groups")
+            if isinstance(groups, list) and groups:
+                cur = cfg.get("current_group_id")
+                group = None
+                for g in groups:
+                    if g.get("id") == cur:
+                        group = g
+                        break
+                if group is None:
+                    group = groups[0]
+                    cfg["current_group_id"] = group.get("id")
+                sched_map = {s["id"]: s for s in group.get("schedules", [])}
+                if set(order) != set(sched_map.keys()):
+                    return ("Order must contain all schedules", 400)
+                group["schedules"] = [sched_map[i] for i in order]
+            else:
+                sched_map = {s["id"]: s for s in cfg.get("schedules", [])}
+                if set(order) != set(sched_map.keys()):
+                    return ("Order must contain all schedules", 400)
+                cfg["schedules"] = [sched_map[i] for i in order]
             save_config(cfg)
         sched.reload_jobs()
         return "OK"
 
+    @app.get("/api/schedule-groups")
+    def api_schedule_groups():
+        with LOCK:
+            groups = cfg.get("schedule_groups", [])
+            current = cfg.get("current_group_id")
+            summary = [{"id": g.get("id"), "name": g.get("name", ""), "count": len(g.get("schedules", []))} for g in groups]
+            return jsonify({"current": current, "groups": summary})
+
+    @app.post("/api/schedule-groups")
+    def api_schedule_groups_create():
+        data = request.get_json(force=True) or {}
+        name = str(data.get("name") or "").strip() or "New Group"
+        with LOCK:
+            groups = cfg.setdefault("schedule_groups", [])
+            new_id = str(uuid.uuid4())
+            groups.append({"id": new_id, "name": name, "schedules": []})
+            if not cfg.get("current_group_id"):
+                cfg["current_group_id"] = new_id
+            save_config(cfg)
+        return jsonify({"id": new_id})
+
+    @app.post("/api/schedule-groups/select")
+    def api_schedule_groups_select():
+        data = request.get_json(force=True) or {}
+        group_id = data.get("id")
+        with LOCK:
+            groups = cfg.get("schedule_groups", [])
+            if not any(g.get("id") == group_id for g in groups):
+                return ("Group not found", 404)
+            cfg["current_group_id"] = group_id
+            save_config(cfg)
+        return "OK"
+
+    @app.route("/api/schedule-groups/<gid>", methods=["DELETE"])
+    def api_schedule_groups_delete(gid: str):
+        with LOCK:
+            groups = cfg.get("schedule_groups", [])
+            if not groups:
+                return ("No groups", 400)
+            if len(groups) == 1 and groups[0].get("id") == gid:
+                return ("Cannot delete last group", 400)
+            before = len(groups)
+            groups = [g for g in groups if g.get("id") != gid]
+            if len(groups) == before:
+                return ("Group not found", 404)
+            cfg["schedule_groups"] = groups
+            if cfg.get("current_group_id") == gid:
+                cfg["current_group_id"] = groups[0].get("id")
+            save_config(cfg)
+        return "OK"
+
+    @app.post("/api/schedule-groups/<gid>/add-all")
+    def api_schedule_groups_add_all(gid: str):
+        data = request.get_json(force=True) or {}
+        order = data.get("order")
+        on = data.get("on")
+        duration_minutes = data.get("duration_minutes")
+        gap_minutes = data.get("gap_minutes", 0)
+        days_raw = data.get("days", "daily")
+        if not isinstance(order, list) or not on or duration_minutes is None:
+            return ("Invalid payload", 400)
+        try:
+            duration_minutes = int(duration_minutes)
+            gap_minutes = int(gap_minutes)
+        except Exception:
+            return ("Invalid duration/gap", 400)
+        def _parse_time_str(t: str):
+            parts = str(t).strip().split(":")
+            if len(parts) != 2:
+                raise ValueError
+            h = int(parts[0]); m = int(parts[1])
+            if h < 0 or h > 23 or m < 0 or m > 59:
+                raise ValueError
+            return h, m
+        try:
+            h0, m0 = _parse_time_str(on)
+        except Exception:
+            return ("Times must be HH:MM (24h)", 400)
+        # Parse days
+        try:
+            if isinstance(days_raw, str):
+                days = parse_days(days_raw)
+            elif isinstance(days_raw, list):
+                tmp = []
+                for d in days_raw:
+                    try:
+                        tmp.append(int(d))
+                    except Exception:
+                        tmp.append(["mon","tue","wed","thu","fri","sat","sun"].index(str(d)[:3].lower()))
+                days = [d for d in tmp if 0 <= d <= 6]
+            else:
+                return ("Invalid days", 400)
+            if len(days) == 0:
+                return ("No days selected", 400)
+        except Exception as e:
+            return (str(e), 400)
+        with LOCK:
+            groups = cfg.setdefault("schedule_groups", [])
+            group = next((g for g in groups if g.get("id") == gid), None)
+            if group is None:
+                return ("Group not found", 404)
+            schedules = group.setdefault("schedules", [])
+            t_minutes = h0 * 60 + m0
+            for pin in order:
+                try:
+                    pi = int(pin)
+                except Exception:
+                    return ("Invalid pin in order", 400)
+                on_h = (t_minutes // 60) % 24
+                on_m = t_minutes % 60
+                off_hm = t_minutes + duration_minutes
+                off_h = (off_hm // 60) % 24
+                off_m = off_hm % 60
+                entry = {
+                    "id": str(uuid.uuid4()),
+                    "pin": pi,
+                    "on": f"{on_h:02d}:{on_m:02d}",
+                    "off": f"{off_h:02d}:{off_m:02d}",
+                    "days": days,
+                    "enabled": True,
+                }
+                schedules.append(entry)
+                t_minutes += duration_minutes + gap_minutes
+            save_config(cfg)
+        sched.reload_jobs()
+        return "OK"
+ 
     @app.get("/api/rain")
     def api_rain_status():
         """Return rain delay status for the UI.
