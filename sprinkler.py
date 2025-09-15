@@ -976,6 +976,43 @@ input[type="number"]{width:90px}
       <div class="chev">▶</div>
     </div>
     <div class="collap-body" id="schedulesBody">
+        <div id="groupsBar" class="row" style="margin-bottom:10px; align-items:center; gap:8px">
+          <label class="inline">Group
+            <select id="groupSelect"></select>
+          </label>
+          <button id="newGroupBtn" class="btn">New Group</button>
+          <button id="deleteGroupBtn" class="btn">Delete Group</button>
+        </div>
+        <div id="addAllPanel" class="card" style="padding:10px; margin-bottom:12px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap">
+            <h3 style="margin:0; font-size:.95rem; color:var(--muted)">Add All Active Pins</h3>
+            <button id="toggleAddAll" class="btn">Show</button>
+          </div>
+          <div id="addAllBody" style="display:none; margin-top:10px;">
+            <div class="row" style="gap:8px; align-items:center; margin-bottom:8px;">
+              <label>Start <input id="aaOn" type="text" placeholder="HH:MM" size="5"></label>
+              <label>Duration (min) <input id="aaDur" type="number" min="1" value="10" style="width:90px"></label>
+              <label>Gap (min) <input id="aaGap" type="number" min="0" value="0" style="width:90px"></label>
+            </div>
+            <div class="row" id="aaDays" style="margin-bottom:8px;">
+              <label><input type="checkbox" value="0">Mon</label>
+              <label><input type="checkbox" value="1">Tue</label>
+              <label><input type="checkbox" value="2">Wed</label>
+              <label><input type="checkbox" value="3">Thu</label>
+              <label><input type="checkbox" value="4">Fri</label>
+              <label><input type="checkbox" value="5">Sat</label>
+              <label><input type="checkbox" value="6">Sun</label>
+            </div>
+            <div>
+              <div style="color:var(--muted); margin-bottom:6px;">Order</div>
+              <div id="aaList" class="list"></div>
+            </div>
+            <div style="margin-top:10px; display:flex; gap:8px;">
+              <button id="aaSubmit" class="btn primary">Create Sequence</button>
+            </div>
+          </div>
+        </div>
+
       <div class="section-pad">
         <div class="add-sched" style="margin-bottom:12px;">
           <h3 style="margin:12px 0 8px; font-size:.95rem; color:var(--muted)">Add Schedule</h3>
@@ -1086,6 +1123,9 @@ function fetchStatus(){
     updateHeader(data);
     renderPins(data.pins_slots, data.automation_enabled, data.system_enabled);
     updateSchedules(data.schedules);
+    renderGroups(data.schedule_groups);
+    hydrateAddAllList(data.pins_slots);
+
     hydratePinSelect(data.pins);
   });
   fetch('/api/rain').then(r=>r.json()).then(updateRain).catch(()=>{});
@@ -1417,6 +1457,106 @@ function sequenceSchedules(){
   }
   Promise.all(promises).then(fetchStatus);
 }
+/* ========= Groups + Add-All ========= */
+function renderGroups(info){
+  const sel = document.getElementById('groupSelect');
+  const delBtn = document.getElementById('deleteGroupBtn');
+  if(!sel) return;
+  sel.innerHTML = '';
+  const groups = (info && Array.isArray(info.groups)) ? info.groups : [];
+  const current = info ? info.current : null;
+  for(const g of groups){
+    const o = document.createElement('option');
+    o.value = g.id || '';
+    o.textContent = g.name ? `${g.name} (${g.count||0})` : `(unnamed) (${g.count||0})`;
+    if(g.id === current) o.selected = true;
+    sel.appendChild(o);
+  }
+  delBtn.disabled = groups.length <= 1;
+}
+
+function fetchGroupsAndRefresh(){
+  fetch('/api/schedule-groups').then(r=>r.json()).then(data=>{
+    renderGroups(data);
+    fetchStatus();
+  });
+}
+
+function selectGroup(id){
+  return fetch('/api/schedule-groups/select', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({id})})
+    .then(fetchStatus);
+}
+
+function createGroup(){
+  const name = prompt('New group name?', '') || '';
+  return fetch('/api/schedule-groups', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name})})
+    .then(fetchStatus);
+}
+
+function deleteGroup(){
+  const sel = document.getElementById('groupSelect');
+  if(!sel || !sel.value) return;
+  if(!confirm('Delete this group?')) return;
+  fetch(`/api/schedule-groups/${sel.value}`, {method:'DELETE'}).then(fetchStatus);
+}
+
+function toggleAddAll(){
+  const body = document.getElementById('addAllBody');
+  const btn = document.getElementById('toggleAddAll');
+  if(!body || !btn) return;
+  const show = body.style.display === 'none';
+  body.style.display = show ? 'block' : 'none';
+  btn.textContent = show ? 'Hide' : 'Show';
+}
+
+function hydrateAddAllList(pins){
+  const list = document.getElementById('aaList');
+  if(!list) return;
+  list.innerHTML = '';
+  pins.forEach(p=>{
+    const row=document.createElement('div'); row.className='pin-row'; row.draggable=false; row.dataset.pin=p.pin;
+    const handle=document.createElement('button'); handle.type='button'; handle.className='drag-handle'; handle.setAttribute('aria-label','Reorder'); handle.textContent='≡'; row.appendChild(handle);
+    const label=document.createElement('span'); label.textContent=(p.name || ('Pin '+p.pin)); row.appendChild(label);
+    list.appendChild(row);
+    attachAA_Drag(handle, row, list);
+  });
+}
+
+let aaPress=null, aaDrag=null, aaPH=null, aaSY=0;
+function attachAA_Drag(handle,row,list){
+  handle.addEventListener('keydown',(e)=>{ if(e.key==='ArrowUp'||e.key==='ArrowLeft'){ e.preventDefault(); if(row.previousElementSibling) list.insertBefore(row,row.previousElementSibling); else list.insertBefore(row,list.firstChild); } if(e.key==='ArrowDown'||e.key==='ArrowRight'){ e.preventDefault(); if(row.nextElementSibling) list.insertBefore(row.nextElementSibling,row); else list.appendChild(row); } });
+  if('PointerEvent' in window){
+    handle.addEventListener('pointerdown',(e)=>{ if(e.button!==0) return; aaSY=e.clientY; aaPress=setTimeout(()=>aaStart(row,list),220); handle.setPointerCapture(e.pointerId); });
+    handle.addEventListener('pointermove',(e)=>{ if(!aaDrag && aaPress && Math.abs(e.clientY-aaSY)>8){ clearTimeout(aaPress); aaPress=null; aaStart(row,list); } aaMove(e,list); });
+    ['pointerup','pointercancel','lostpointercapture'].forEach(ev=> handle.addEventListener(ev,()=>{ if(aaPress){ clearTimeout(aaPress); aaPress=null; } aaEnd(list); }));
+  }else{
+    handle.addEventListener('mousedown',()=>aaStart(row,list));
+    document.addEventListener('mousemove',(e)=>aaMove(e,list));
+    document.addEventListener('mouseup',()=>aaEnd(list));
+  }
+}
+function aaStart(row,list){ aaDrag=row; aaPH=document.createElement('div'); aaPH.className='pin-row placeholder'; aaPH.style.height=row.offsetHeight+'px'; list.insertBefore(aaPH,row.nextSibling); row.classList.add('dragging'); }
+function aaMove(e,list){ if(!aaDrag) return; const y=e.clientY; const children=[...list.querySelectorAll('.pin-row:not(.dragging)')]; let inserted=false; for(const child of children){ const r=child.getBoundingClientRect(); const before = y < r.top + r.height/2; if(before){ list.insertBefore(aaPH, child); inserted=true; break; } } if(!inserted) list.appendChild(aaPH); }
+function aaEnd(list){ if(!aaDrag) return; const parent=aaPH.parentElement; parent.insertBefore(aaDrag, aaPH); aaDrag.classList.remove('dragging'); aaPH.remove(); aaDrag=null; aaPH=null; }
+
+function submitAddAll(){
+  const sel = document.getElementById('groupSelect');
+  const gid = sel && sel.value;
+  if(!gid){ alert('Select or create a group first.'); return; }
+  const onStr = document.getElementById('aaOn').value.trim();
+  const durMin = parseInt(document.getElementById('aaDur').value,10);
+  const gapMin = parseInt(document.getElementById('aaGap').value,10) || 0;
+  const onM = parseHHMM(onStr);
+  if(onM==null || !Number.isFinite(durMin) || durMin<=0){ alert('Enter valid Start HH:MM and Duration minutes'); return; }
+  const days = [...document.querySelectorAll('#aaDays input[type=checkbox]')].filter(cb=>cb.checked).map(cb=>parseInt(cb.value,10));
+  if(days.length===0){ alert('Select at least one day'); return; }
+  const order = [...document.querySelectorAll('#aaList .pin-row')].map(r=>parseInt(r.dataset.pin,10));
+  if(order.length===0){ alert('No active pins to add'); return; }
+  const payload = { order, on: toHHMM(onM), duration_minutes: durMin, gap_minutes: gapMin, days };
+  fetch(`/api/schedule-groups/${gid}/add-all`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)})
+    .then(r=> r.ok ? fetchStatus() : r.text().then(t=>alert(t)));
+}
+
 
   /* ========= Rain ========= */
   function updateRain(rd){
@@ -1441,6 +1581,13 @@ function sequenceSchedules(){
     sum.textContent = 'Enabled: ' + (en && en.checked ? 'Yes' : 'No') + ' • Threshold: ' + (th ? th.value : thr) + '%';
   }
 }
+  // Groups controls
+  document.getElementById('groupSelect').addEventListener('change', (e)=> selectGroup(e.target.value));
+  document.getElementById('newGroupBtn').addEventListener('click', createGroup);
+  document.getElementById('deleteGroupBtn').addEventListener('click', deleteGroup);
+  document.getElementById('toggleAddAll').addEventListener('click', toggleAddAll);
+  document.getElementById('aaSubmit').addEventListener('click', submitAddAll);
+
 function init(){
   setupPinDrag(document.getElementById('activeList'));
   setupScheduleDrag();
