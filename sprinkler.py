@@ -605,35 +605,37 @@ class SprinklerScheduler:
         self.pinman.on(pin)
 
     def reload_jobs(self):
-        """Rebuild all APScheduler jobs based on the current schedule config.
+        """Rebuild jobs from current config, merging overlaps per pin/day.
 
-        This method first attempts to remove all existing jobs using the
-        scheduler's remove_job() API.  In case the job object itself
-        provides a remove() method (e.g., on older APScheduler versions), we
-        fall back to that.  When rebuilding the jobs, any invalid
-        schedule entry (malformed times or days) is skipped gracefully
-        with an error message to stdout instead of raising an
-        exception.  If automation is disabled, no jobs are added.
+        - Supports legacy flat schedules (cfg['schedules'])
+        - Supports groups (cfg['schedule_groups']) and optional sections within each group
+        - For each pin and weekday, merge overlapping intervals so a valve stays ON from earliest start to latest stop
         """
-        # Remove all existing jobs using the scheduler API; fall back to the
-        # job object's own remove() method if remove_job() is unavailable.
         for job in list(self.sched.get_jobs()):
             try:
-                # Prefer the scheduler's remove_job() method
                 if hasattr(self.sched, "remove_job"):
-                    self.sched.remove_job(job.id)
+                    self.sched.remove_job(job.get("id") if isinstance(job, dict) else job.id)
                 else:
                     job.remove()
             except Exception:
-                # Ignore any errors during job removal to avoid
-                # disrupting the reload process.
                 try:
                     job.remove()
                 except Exception:
                     pass
+
         if not self.cfg.get("automation_enabled", True) or not self.cfg.get("system_enabled", True):
             return
-        schedules_list = self.cfg.get("schedules", [])
+
+        def _collect_schedules_from_group(group: dict) -> List[dict]:
+            result = []
+            sec = group.get("sections")
+            if isinstance(sec, list) and sec:
+                for s in sec:
+                    result.extend(s.get("schedules", []) or [])
+            result.extend(group.get("schedules", []) or [])
+            return result
+
+        schedules_list: List[dict] = []
         groups = self.cfg.get("schedule_groups")
         if isinstance(groups, list) and groups:
             cur = self.cfg.get("current_group_id")
@@ -644,26 +646,24 @@ class SprinklerScheduler:
                     break
             if group is None:
                 group = groups[0]
-            schedules_list = group.get("schedules", []) or []
+                self.cfg["current_group_id"] = group.get("id")
+            schedules_list = _collect_schedules_from_group(group)
+        else:
+            schedules_list = self.cfg.get("schedules", []) or []
+
         for entry in schedules_list:
-            if not entry.get("enabled", True):
-                continue
             try:
+                if not entry.get("enabled", True):
+                    continue
                 pin = int(entry["pin"])
-                on_parts = entry["on"].strip().split(":")
-                off_parts = entry["off"].strip().split(":")
-                if len(on_parts) != 2 or len(off_parts) != 2:
-                    raise ValueError("Bad time format")
-                on_hour, on_minute = map(int, on_parts)
-                off_hour, off_minute = map(int, off_parts)
-                on_min_total = on_hour * 60 + on_minute
-                off_min_total = off_hour * 60 + off_minute
-                days = entry.get("days", list(range(7)))
-                if days is None:
-                    days = list(range(7))
+                on_h, on_m = map(int, entry["on"].strip().split(":"))
+                off_h, off_m = map(int, entry["off"].strip().split(":"))
+                on_min = on_h * 60 + on_m
+                off_min = off_h * 60 + off_m
+                days = entry.get("days", list(range(7))) or list(range(7))
                 for d in days:
                     di = int(d)
-                    trig_on = CronTrigger(day_of_week=di, hour=on_hour, minute=on_minute)
+                    trig_on = CronTrigger(day_of_week=di, hour=on_h, minute=on_m)
                     self.sched.add_job(
                         self._maybe_on,
                         args=[pin],
@@ -672,8 +672,8 @@ class SprinklerScheduler:
                         replace_existing=True,
                         misfire_grace_time=300,
                     )
-                    off_day = di if off_min_total > on_min_total else (di + 1) % 7
-                    trig_off = CronTrigger(day_of_week=off_day, hour=off_hour, minute=off_minute)
+                    off_day = di if off_min > on_min else (di + 1) % 7
+                    trig_off = CronTrigger(day_of_week=off_day, hour=off_h, minute=off_m)
                     self.sched.add_job(
                         self.pinman.off,
                         args=[pin],
@@ -682,11 +682,66 @@ class SprinklerScheduler:
                         replace_existing=True,
                         misfire_grace_time=300,
                     )
+            except Exception:
+                pass
+
+        per_pin_day: Dict[tuple, List[tuple]] = {}
+        for entry in schedules_list:
+            try:
+                if not entry.get("enabled", True):
+                    continue
+                pin = int(entry["pin"])
+                on_h, on_m = map(int, entry["on"].strip().split(":"))
+                off_h, off_m = map(int, entry["off"].strip().split(":"))
+                on_min = on_h * 60 + on_m
+                off_min = off_h * 60 + off_m
+                if off_min <= on_min:
+                    continue
+                days = entry.get("days", list(range(7))) or list(range(7))
+                for d in days:
+                    di = int(d)
+                    per_pin_day.setdefault((pin, di), []).append((on_min, off_min))
             except Exception as e:
                 try:
                     print(f"[SchedulerError] Skipping schedule {entry.get('id','?')}: {e}")
                 except Exception:
                     pass
+
+        for (pin, di), intervals in per_pin_day.items():
+            if not intervals:
+                continue
+            intervals.sort(key=lambda x: x[0])
+            merged = []
+            cur_s, cur_e = intervals[0]
+            for s, e in intervals[1:]:
+                if s <= cur_e:  # overlap/adjacent
+                    cur_e = max(cur_e, e)
+                else:
+                    merged.append((cur_s, cur_e))
+                    cur_s, cur_e = s, e
+            merged.append((cur_s, cur_e))
+
+            for s, e in merged:
+                s_h, s_m = divmod(s, 60)
+                e_h, e_m = divmod(e, 60)
+                trig_on = CronTrigger(day_of_week=di, hour=s_h, minute=s_m)
+                self.sched.add_job(
+                    self._maybe_on,
+                    args=[pin],
+                    trigger=trig_on,
+                    id=f"merged-{pin}-on-{di}-{s_h:02d}{s_m:02d}",
+                    replace_existing=True,
+                    misfire_grace_time=300,
+                )
+                trig_off = CronTrigger(day_of_week=di, hour=e_h, minute=e_m)
+                self.sched.add_job(
+                    self.pinman.off,
+                    args=[pin],
+                    trigger=trig_off,
+                    id=f"merged-{pin}-off-{di}-{e_h:02d}{e_m:02d}",
+                    replace_existing=True,
+                    misfire_grace_time=300,
+                )
 
 
 # Utility functions to build preset schedules
@@ -837,6 +892,8 @@ def build_app(cfg: dict, pinman: PinManager, sched: SprinklerScheduler, rain: Ra
     endpoints return empty values and controls are disabled.
     """
     app = Flask(__name__)
+    app.sched = sched
+
     # Inline HTML for the modernised UI.  The page uses a dark theme with
     # white text and organises controls for each pin (zone), allows
     # renaming, manual run timers and schedule management.  Schedule IDs
@@ -1741,10 +1798,11 @@ if(document.readyState === 'loading'){
             except Exception:
                 next_run_map = {}
 
-            # Determine current schedules (support groups)
-            schedules_src = cfg.get("schedules", [])
+            # Determine current schedules (support groups + sections)
+            schedules_src = cfg.get("schedules", []) or []
             groups = cfg.get("schedule_groups")
             current_group_id = None
+            schedule_sections = []
             if isinstance(groups, list) and groups:
                 current_group_id = cfg.get("current_group_id")
                 group = None
@@ -1755,29 +1813,76 @@ if(document.readyState === 'loading'){
                 if group is None:
                     group = groups[0]
                     current_group_id = group.get("id")
-                schedules_src = group.get("schedules", []) or []
-
-            sch_view = []
-            for s in schedules_src:
-                nr_dt = next_run_map.get(s["id"])
-                if nr_dt:
-                    try:
-                        nr_str = nr_dt.astimezone().strftime("%Y-%m-%d %H:%M:%S")
-                    except Exception:
-                        nr_str = str(nr_dt)
-                else:
-                    nr_str = None
-                sch_view.append({
-                    "id": s["id"],
-                    "pin": int(s["pin"]),
-                    "pin_name": cfg["pins"].get(str(s["pin"]), {}).get("name", f"Pin {s['pin']}"),
-                    "on": s["on"],
-                    "off": s["off"],
-                    "day_names": [DAY_NAMES[d] for d in s.get("days", [])],
-                    "days": s.get("days", []),
-                    "enabled": bool(s.get("enabled", True)),
-                    "next_run": nr_str,
-                })
+                secs = group.get("sections", []) or []
+                for sec in secs:
+                    sec_rows = []
+                    for s in (sec.get("schedules", []) or []):
+                        nr_dt = next_run_map.get(s.get("id"))
+                        if nr_dt:
+                            try:
+                                nr_str = nr_dt.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+                            except Exception:
+                                nr_str = str(nr_dt)
+                        else:
+                            nr_str = None
+                        sec_rows.append({
+                            "id": s["id"],
+                            "pin": int(s["pin"]),
+                            "pin_name": cfg["pins"].get(str(s["pin"]), {}).get("name", f"Pin {s['pin']}"),
+                            "on": s["on"],
+                            "off": s["off"],
+                            "day_names": [DAY_NAMES[d] for d in s.get("days", [])],
+                            "days": s.get("days", []),
+                            "enabled": bool(s.get("enabled", True)),
+                            "next_run": nr_str,
+                        })
+                    schedule_sections.append({"id": sec.get("id"), "name": sec.get("name",""), "schedules": sec_rows})
+                flat = []
+                for sec in schedule_sections:
+                    flat.extend(sec["schedules"])
+                for s in (group.get("schedules", []) or []):
+                    nr_dt = next_run_map.get(s.get("id"))
+                    if nr_dt:
+                        try:
+                            nr_str = nr_dt.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+                        except Exception:
+                            nr_str = str(nr_dt)
+                    else:
+                        nr_str = None
+                    flat.append({
+                        "id": s["id"],
+                        "pin": int(s["pin"]),
+                        "pin_name": cfg["pins"].get(str(s["pin"]), {}).get("name", f"Pin {s['pin']}"),
+                        "on": s["on"],
+                        "off": s["off"],
+                        "day_names": [DAY_NAMES[d] for d in s.get("days", [])],
+                        "days": s.get("days", []),
+                        "enabled": bool(s.get("enabled", True)),
+                        "next_run": nr_str,
+                    })
+                sch_view = flat
+            else:
+                sch_view = []
+                for s in schedules_src:
+                    nr_dt = next_run_map.get(s["id"])
+                    if nr_dt:
+                        try:
+                            nr_str = nr_dt.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+                        except Exception:
+                            nr_str = str(nr_dt)
+                    else:
+                        nr_str = None
+                    sch_view.append({
+                        "id": s["id"],
+                        "pin": int(s["pin"]),
+                        "pin_name": cfg["pins"].get(str(s["pin"]), {}).get("name", f"Pin {s['pin']}"),
+                        "on": s["on"],
+                        "off": s["off"],
+                        "day_names": [DAY_NAMES[d] for d in s.get("days", [])],
+                        "days": s.get("days", []),
+                        "enabled": bool(s.get("enabled", True)),
+                        "next_run": nr_str,
+                    })
 
             now_dt = datetime.now().astimezone()
             server_time_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
@@ -1788,16 +1893,21 @@ if(document.readyState === 'loading'){
 
             groups_summary = {"current": None, "groups": []}
             if isinstance(groups, list):
-                groups_summary = {
-                    "current": current_group_id,
-                    "groups": [{"id": g.get("id"), "name": g.get("name", ""), "count": len(g.get("schedules", []))} for g in groups],
-                }
+                summary = []
+                for g in groups:
+                    count = len(g.get("schedules", []) or [])
+                    secs = g.get("sections", []) or []
+                    for sec in secs:
+                        count += len(sec.get("schedules", []) or [])
+                    summary.append({"id": g.get("id"), "name": g.get("name",""), "count": count})
+                groups_summary = {"current": current_group_id, "groups": summary}
 
             return jsonify({
                 "pins": pins_view,
                 "pins_slots": slots_sorted,
                 "pins_spares": spares_sorted,
                 "schedules": sch_view,
+                "schedule_sections": schedule_sections,
                 "schedule_groups": groups_summary,
                 "automation_enabled": bool(cfg.get("automation_enabled", True)),
                 "system_enabled": bool(cfg.get("system_enabled", True)),
@@ -1985,7 +2095,22 @@ if(document.readyState === 'loading'){
                 if group is None:
                     group = groups[0]
                     cfg["current_group_id"] = group.get("id")
-                group.setdefault("schedules", []).append(entry)
+                section_req = (data.get("section") if isinstance(data, dict) else None)
+                if section_req in (None, "", "new"):
+                    secs = group.setdefault("sections", [])
+                    new_sec = {"id": str(uuid.uuid4()), "name": f"Schedule {len(secs)+1}", "schedules": [entry]}
+                    secs.append(new_sec)
+                else:
+                    secs = group.setdefault("sections", [])
+                    target = None
+                    for s in secs:
+                        if s.get("id") == section_req:
+                            target = s
+                            break
+                    if target is None:
+                        target = {"id": str(uuid.uuid4()), "name": f"Schedule {len(secs)+1}", "schedules": []}
+                        secs.append(target)
+                    target.setdefault("schedules", []).append(entry)
             else:
                 cfg.setdefault("schedules", []).append(entry)
             save_config(cfg)
@@ -2129,10 +2254,16 @@ if(document.readyState === 'loading'){
                 if group is None:
                     group = groups[0]
                     cfg["current_group_id"] = group.get("id")
-                sched_map = {s["id"]: s for s in group.get("schedules", [])}
-                if set(order) != set(sched_map.keys()):
-                    return ("Order must contain all schedules", 400)
-                group["schedules"] = [sched_map[i] for i in order]
+                all_ids = set([s["id"] for s in group.get("schedules", []) or []])
+                for sec in (group.get("sections", []) or []):
+                    for s in (sec.get("schedules", []) or []):
+                        all_ids.add(s["id"])
+                if set(order) != all_ids:
+                    # Fallback to legacy behavior when sections absent
+                    sched_map = {s["id"]: s for s in group.get("schedules", [])}
+                    if set(order) != set(sched_map.keys()):
+                        return ("Order must contain all schedules", 400)
+                    group["schedules"] = [sched_map[i] for i in order]
             else:
                 sched_map = {s["id"]: s for s in cfg.get("schedules", [])}
                 if set(order) != set(sched_map.keys()):
