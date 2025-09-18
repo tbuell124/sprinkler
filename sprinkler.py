@@ -137,38 +137,205 @@ except Exception:
 try:
     from flask import Flask, jsonify, request, Response, redirect  # type: ignore
 except Exception:
-    # Provide minimal stubs when Flask is not installed.  The web
-    # interface will not be available, but the CLI can still be used
-    # without import errors.
-    class Flask:
-        def __init__(self, name):
-            self.name = name
-        # Decorators for route, get and post simply wrap the function and
-        # return it unchanged.  No routing is performed.
-        def route(self, *args, **kwargs):
-            def decorator(fn):
-                return fn
-            return decorator
-        def get(self, *args, **kwargs):
-            return self.route(*args, **kwargs)
-        def post(self, *args, **kwargs):
-            return self.route(*args, **kwargs)
-        def run(self, host=None, port=None):
-            print("Flask app would run on", host, port)
-    def jsonify(obj):
-        return obj
-    def redirect(location, code=302):
-        return location
-    # Simulate Flask request with args and get_json method
+    # Provide a lightweight Flask clone sufficient for unit tests when the
+    # real dependency is unavailable.  The stub supports registering simple
+    # routes with typed path parameters (e.g. ``<int:pin>``), running them via
+    # an in-process test client and returning JSON responses that mimic Flask's
+    # ``Response`` objects.
+    import json as _json
+    import re as _re
+    from typing import Any as _Any, Callable as _Callable, Dict as _Dict, Iterable as _Iterable, List as _List, Tuple as _Tuple
+    from urllib.parse import parse_qs as _parse_qs, urlparse as _urlparse
+
+    class Response:  # type: ignore[override]
+        """Small stand-in for :class:`flask.Response`."""
+
+        def __init__(self, data: _Any, status: int = 200, mimetype: str | None = "application/json"):
+            self.status_code = status
+            self.mimetype = mimetype
+            if isinstance(data, (dict, list)):
+                self.data = _json.dumps(data)
+                self._json = data
+            else:
+                self.data = data if isinstance(data, str) else str(data)
+                try:
+                    self._json = _json.loads(self.data)
+                except Exception:
+                    self._json = None
+
+        def get_json(self):  # type: ignore[override]
+            if self._json is None:
+                try:
+                    self._json = _json.loads(self.data)
+                except Exception:
+                    self._json = None
+            return self._json
+
+
+    def jsonify(*args, **kwargs):  # type: ignore[override]
+        payload: _Any
+        if args and kwargs:
+            raise TypeError("jsonify() behavior differs from Flask: use args or kwargs, not both")
+        if kwargs:
+            payload = kwargs
+        elif len(args) == 1:
+            payload = args[0]
+        else:
+            payload = list(args)
+        return Response(payload)
+
+
+    def redirect(location: str, code: int = 302):  # type: ignore[override]
+        return Response({"redirect": location}, status=code)
+
+
+    class _Args(dict):
+        def get(self, key, default=None, type=None):  # type: ignore[override]
+            values = super().get(key)
+            if not values:
+                return default
+            value = values[-1]
+            if type is not None:
+                try:
+                    return type(value)
+                except Exception:
+                    return default
+            return value
+
+
     class _Request:
         def __init__(self):
-            self.args = {}
-        def get_json(self, force=False):
-            return {}
+            self.args: _Args = _Args()
+            self._json: _Any = None
+            self.method: str = "GET"
+            self.view_args: _Dict[str, _Any] = {}
+
+        def get_json(self, force: bool = False, silent: bool = False):
+            return self._json
+
+        @property
+        def json(self):  # type: ignore[override]
+            return self._json
+
     request = _Request()
-    class Response(str):
-        def __new__(cls, data, mimetype=None):
-            return str.__new__(cls, data)
+
+
+    class _Route:
+        __slots__ = ("methods", "pattern", "converters", "func")
+
+        def __init__(self, methods: _Iterable[str], rule: str, func: _Callable[..., _Any]):
+            self.methods = {m.upper() for m in methods}
+            self.pattern, self.converters = self._compile_rule(rule)
+            self.func = func
+
+        @staticmethod
+        def _compile_rule(rule: str):
+            pattern = "^"
+            converters: _Dict[str, _Callable[[str], _Any]] = {}
+            for part in rule.strip("/").split("/"):
+                if not part:
+                    continue
+                pattern += "/"
+                if part.startswith("<") and part.endswith(">"):
+                    inner = part[1:-1]
+                    if ":" in inner:
+                        type_name, name = inner.split(":", 1)
+                    else:
+                        type_name, name = "string", inner
+                    if type_name == "int":
+                        converters[name] = int
+                        pattern += rf"(?P<{name}>-?\d+)"
+                    else:
+                        converters[name] = lambda x: x
+                        pattern += rf"(?P<{name}>[^/]+)"
+                else:
+                    pattern += _re.escape(part)
+            if rule.endswith("/"):
+                pattern += "/"
+            pattern += "$"
+            return _re.compile(pattern), converters
+
+        def matches(self, method: str, path: str):
+            if method not in self.methods:
+                return None
+            match = self.pattern.match(path)
+            if not match:
+                return None
+            args = {}
+            for key, value in match.groupdict().items():
+                conv = self.converters.get(key, lambda x: x)
+                args[key] = conv(value)
+            return args
+
+
+    class Flask:  # type: ignore[override]
+        def __init__(self, name: str):
+            self.name = name
+            self._routes: _List[_Route] = []
+            self.testing = False
+
+        def route(self, rule: str, methods: _Iterable[str] | None = None, **kwargs):
+            methods = methods or ["GET"]
+
+            def decorator(func: _Callable[..., _Any]):
+                self._routes.append(_Route(methods, rule, func))
+                return func
+
+            return decorator
+
+        def get(self, rule: str, **kwargs):
+            return self.route(rule, methods=["GET"], **kwargs)
+
+        def post(self, rule: str, **kwargs):
+            return self.route(rule, methods=["POST"], **kwargs)
+
+        def run(self, host: str | None = None, port: int | None = None):
+            print(f"Flask stub running on {host}:{port}")
+
+        def test_client(self):  # type: ignore[override]
+            app = self
+
+            class _Client:
+                def _invoke(self, method: str, url: str, json: _Any = None):
+                    parsed = _urlparse(url)
+                    path = parsed.path or "/"
+                    request.args = _Args({k: v for k, v in _parse_qs(parsed.query).items()})
+                    request._json = json
+                    request.method = method
+                    for route in app._routes:
+                        view_args = route.matches(method, path)
+                        if view_args is None:
+                            continue
+                        request.view_args = view_args
+                        result = route.func(**view_args)
+                        if isinstance(result, Response):
+                            return result
+                        status = 200
+                        headers = None
+                        body = result
+                        if isinstance(result, tuple):
+                            if len(result) == 3:
+                                body, status, headers = result
+                            elif len(result) == 2:
+                                body, status = result
+                            else:
+                                body = result[0]
+                            if headers:
+                                # headers ignored in stub
+                                pass
+                        return Response(body, status=status)
+                    return Response({"error": "Not Found"}, status=404)
+
+                def get(self, url: str, json: _Any = None):
+                    return self._invoke("GET", url, json=json)
+
+                def post(self, url: str, json: _Any = None):
+                    return self._invoke("POST", url, json=json)
+
+                def delete(self, url: str, json: _Any = None):
+                    return self._invoke("DELETE", url, json=json)
+
+            return _Client()
 
 # Path to our persistent configuration.  It lives next to this script.
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
