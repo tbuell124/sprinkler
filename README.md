@@ -35,6 +35,7 @@ Boot the Pi with this card.
 Open **Windows PowerShell** (or Terminal on macOS/Linux), then:
 
 ```bash
+
 # SSH into the Pi (replace with your hostname or IP if needed)
 ssh tybuell@sprinkler
 # or: ssh tybuell@<pi-ip-address>
@@ -60,7 +61,7 @@ sudo usermod -aG gpio $USER
 Optional: pigpio daemon isn’t required. If you later want it:
 sudo apt-get install -y pigpio && sudo systemctl enable --now pigpiod
 
-3) Get the app
+## 3) Get the app
 bash
 Copy code
 cd /srv/sprinkler-controller
@@ -71,7 +72,7 @@ bash
 Copy code
 sed -i 's/\r$//' sprinkler.py
 chmod +x sprinkler.py
-4) First run (creates config.json) and open the web app
+## 4) First run (creates config.json) and open the web app
 bash
 Copy code
 # Easiest, always works:
